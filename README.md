@@ -13,7 +13,7 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
   - ⌛ : Downloaded, sending to chat.
   - ☑️ : Sent successfully.
   - ❌ : Error occurred.
-- **Smart Limits:** 
+- **Smart Limits:**
   - Maximum video duration: 10 minutes.
   - Maximum file size: 50 MB.
   - Rate limiting: 1 request per minute (admin exempt).
@@ -33,28 +33,50 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 ## Deployment
 
 ### Prerequisites
+
 - Docker and Docker Compose
 - A Delta Chat account for the bot
 
 ### Setup
+
 1. Clone this repository.
-2. Build and start the container:
+2. Build the container:
+
    ```bash
-   docker compose up -d --build
+   docker compose build
    ```
-3. Check the logs to get the QR code or link to add the bot:
+
+3. Initialize the Delta Chat account:
+
+   ```bash
+   docker compose run --rm yt_bot python bot.py init bot-email@chatmail-example.com your_password
+   ```
+
+4. Start the bot:
+
+   ```bash
+   docker compose up -d
+   ```
+
+5. Check the logs to get the QR code or link to add the bot:
+
    ```bash
    docker compose logs -f
    ```
-4. Add the bot in Delta Chat and send `/initadmin` to claim ownership.
+
+6. Add the bot in Delta Chat and send `/initadmin` to claim ownership.
 
 ## Admin Management
+
 You can also manage the administrator via the CLI:
+
 ```bash
 docker compose exec yt_bot python set_admin.py --email your@email.com
 ```
 
 ## Support
+
 If you find this bot useful, consider supporting the developer:
+
 - [Ko-fi](https://ko-fi.com/gluek)
 - [Tribute](https://web.tribute.tg/d/IWb)
