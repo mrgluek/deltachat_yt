@@ -327,6 +327,8 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
     url = _make_yt_url(video_id)
     cmd = [
         "yt-dlp", "--no-playlist", "--dump-json", "--no-warnings",
+        "--no-check-certificate", "--geo-bypass",
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
         url
     ]
     try:
@@ -358,6 +360,8 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
         "--max-filesize", "50M",
         "--merge-output-format", "mp4",
         "--no-warnings",
+        "--no-check-certificate", "--geo-bypass",
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
         "--print-json",
         "-o", out_template,
         _make_yt_url(video_id)
@@ -432,6 +436,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
         "--audio-format", fmt,
     ] + pp_args + [
         "--no-warnings",
+        "--no-check-certificate", "--geo-bypass",
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
         "--print-json",
         "-o", out_template,
         _make_yt_url(video_id)
