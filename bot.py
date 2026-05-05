@@ -22,7 +22,9 @@ dc_cli = BotCli("ytbot")
 # Global references
 dc_bot_instance = None
 dc_accid = None
-dc_self_id = None
+
+# Delta Chat constants
+DC_CONTACT_ID_SELF = 1
 
 # Rate limiting: {from_id: last_request_timestamp}
 _user_rate_limits: dict[int, float] = {}
@@ -639,8 +641,8 @@ def on_new_message(bot, accid, event):
     if msg.is_info or accid != dc_accid:
         return
 
-    # Check if outbound using cached self ID
-    if msg.from_id == dc_self_id:
+    # Check if outbound using standard self contact ID
+    if msg.from_id == DC_CONTACT_ID_SELF:
         return
 
     # Track receiving stats
@@ -810,13 +812,9 @@ def on_init(bot, args):
     bg_thread.start()
 
     for accid in bot.rpc.get_all_account_ids():
-        global dc_accid, dc_self_id
+        global dc_accid
         dc_accid = accid
-        try:
-            dc_self_id = bot.rpc.get_self_contact_id(accid)
-        except Exception:
-            dc_self_id = None
-        logger.info(f"Initialized with accid {accid}, self_id {dc_self_id}")
+        logger.info(f"Initialized with accid {accid}")
         bot.rpc.set_config(accid, "displayname", "YT Bot")
         bot.rpc.set_config(accid, "selfstatus",
                            "I download YouTube videos and audio. Send /help for commands.")
