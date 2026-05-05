@@ -322,11 +322,12 @@ def _find_file_in_dir(directory: str, extensions: list[str]) -> str | None:
     return None
 
 
-async def _fetch_video_info(video_id: str) -> dict | None:
-    """Fetch video metadata without downloading."""
+async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
+    """Fetch video metadata without downloading. Returns (info, error_msg)."""
+    url = _make_yt_url(video_id)
     cmd = [
         "yt-dlp", "--no-playlist", "--dump-json", "--no-warnings",
-        _make_yt_url(video_id)
+        url
     ]
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -334,10 +335,16 @@ async def _fetch_video_info(video_id: str) -> dict | None:
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
         if proc.returncode == 0 and stdout:
-            return json.loads(stdout)
+            return json.loads(stdout), None
+        
+        err = stderr.decode(errors='replace').strip()
+        logger.error(f"yt-dlp info fetch failed for {video_id}: {err}")
+        return None, err[:200]
+    except asyncio.TimeoutError:
+        return None, "Timeout (30s)"
     except Exception as e:
         logger.error(f"Failed to fetch info for {video_id}: {e}")
-    return None
+        return None, str(e)
 
 
 async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, dict | None, str | None]:
@@ -562,10 +569,10 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
             return
     
         # 3. Fetch info to know duration for audio strategy
-        info = await _fetch_video_info(video_id)
+        info, error = await _fetch_video_info(video_id)
         if not info:
             _react(bot, accid, req_msg_id, "❌")
-            _send(bot, accid, chat_id, "❌ Could not fetch video info")
+            _send(bot, accid, chat_id, f"❌ Could not fetch video info: {error or 'Unknown error'}")
             return
         
         duration = int(info.get("duration", 0))
@@ -640,7 +647,7 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
     _react(bot, accid, req_msg_id, "⌛")
 
     if not info:
-        info = await _fetch_video_info(video_id)
+        info, _ = await _fetch_video_info(video_id)
 
     title = (info or {}).get("title", video_id)
     duration = (info or {}).get("duration", 0)
@@ -840,6 +847,8 @@ def on_new_message(bot, accid, event):
     if text.startswith('/'):
         return
 
+    logger.debug(f"Processing potential link in message {msg.id}: {text[:50]}...")
+    
     # 2. Auto-detect YouTube links and respond with info
     yt_match = YT_URL_RE.search(text)
     if yt_match:
@@ -893,7 +902,7 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        info = loop.run_until_complete(_fetch_video_info(video_id))
+        info, _ = loop.run_until_complete(_fetch_video_info(video_id))
     finally:
         loop.close()
 
