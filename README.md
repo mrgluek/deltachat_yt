@@ -4,7 +4,7 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 
 ## Features
 
-- **Multi-Service Support:** Downloads from YouTube, **PeerTube, Rutube, Dzen, OK.ru, Coub, Pinterest, SoundCloud, Vimeo, VK, Twitter, Reddit, Instagram, TikTok, Twitch, Bilibili** and more via `yt-dlp`.
+- **Multi-Service Support:** Downloads from YouTube, **PeerTube, Rutube, Dzen, OK.ru, Coub, Pinterest, SoundCloud, Imgur, Vimeo, VK, Twitter, Reddit, Instagram, TikTok, Twitch, Bilibili** and more via `yt-dlp`.
 - **Video Downloads (`/yt`):** Downloads video in MP4 (H.264 + AAC) at 480p. Optimized for speed using pre-muxed formats to avoid server-side re-encoding.
 - **Audio Downloads (`/ytm`):** Extracts audio as high-quality Opus. Optimized to skip re-encoding for short clips to preserve original quality.
 - **Auto-Detection:** Automatically detects links in chat and provides download options with **video thumbnails** and estimated file sizes.
