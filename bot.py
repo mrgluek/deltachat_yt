@@ -113,6 +113,11 @@ SUPPORTED_URL_RE = re.compile(
     r'twitch\.tv/|'
     r'bilibili\.com/|'
     r'rutube\.ru/|'
+    r'dzen\.ru/|'
+    r'ok\.ru/|'
+    r'coub\.com/|'
+    r'pinterest\.com/|'
+    r'soundcloud\.com/|'
     r'[^/]+/w/'  # PeerTube
     r')[^\s]+'
 )
