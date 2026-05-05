@@ -458,6 +458,16 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     with get_download_lock(video_id + download_type):
         cache_path = _get_cache_path(video_id, download_type)
         if os.path.exists(cache_path):
+            # Re-check anti-spam inside the lock for the current chat
+            # This prevents duplicate sends if the user double-tapped the download link
+            last_sent_after_lock = database.get_last_download(chat_id, video_id, download_type)
+            if time.time() - last_sent_after_lock < ANTI_SPAM_SECONDS:
+                warning_key = f"{chat_id}_{video_id}_{download_type}"
+                if time.time() - _anti_spam_warnings.get(warning_key, 0) > 10:
+                    _anti_spam_warnings[warning_key] = time.time()
+                    _send(bot, accid, chat_id, "ℹ️ This video was already sent to this chat recently. Scroll up! 👆")
+                return
+
             await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
             return
 
