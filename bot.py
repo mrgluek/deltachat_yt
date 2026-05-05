@@ -296,7 +296,7 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
         "yt-dlp",
         "--no-playlist",
         "--match-filter", f"duration<={MAX_DURATION_VIDEO}",
-        "-S", "vcodec:h264,res:480,acodec:aac,+size",
+        "-f", "b[ext=mp4][height<=480]/bv[ext=mp4][height<=480]+ba[ext=m4a]/b",
         "--max-filesize", "50M",
         "--merge-output-format", "mp4",
         "--no-warnings",
