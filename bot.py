@@ -42,8 +42,9 @@ _download_semaphore = asyncio.Semaphore(5)
 _download_locks = collections.defaultdict(asyncio.Lock)
 _download_loop = None
 
-# Max video duration in seconds
-MAX_DURATION = 1800  # 30 minutes
+# Max duration in seconds
+MAX_DURATION_VIDEO = 1800  # 30 minutes
+MAX_DURATION_AUDIO = 3600  # 60 minutes
 
 # YouTube URL patterns
 YT_URL_RE = re.compile(
@@ -178,8 +179,13 @@ def _react(bot, accid, msg_id, emoji: str):
 
 
 def _get_cache_path(video_id: str, download_type: str) -> str:
-    ext = "mp4" if download_type == "video" else "mp3"
-    return os.path.join(CACHE_DIR, f"{video_id}.{ext}")
+    if download_type == "video":
+        return os.path.join(CACHE_DIR, f"{video_id}.mp4")
+    # For audio, check both possible extensions
+    mp3_path = os.path.join(CACHE_DIR, f"{video_id}.mp3")
+    if os.path.exists(mp3_path):
+        return mp3_path
+    return os.path.join(CACHE_DIR, f"{video_id}.opus")
 
 
 # ── yt-dlp wrappers ──
@@ -219,7 +225,7 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "--match-filter", f"duration<={MAX_DURATION}",
+        "--match-filter", f"duration<={MAX_DURATION_VIDEO}",
         "-S", "vcodec:h264,res:480,acodec:aac,+size",
         "--max-filesize", "50M",
         "--merge-output-format", "mp4",
@@ -238,10 +244,14 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
         if proc.returncode != 0:
             err = stderr.decode(errors='replace').strip()
             if "duration" in err.lower() or "filter" in err.lower():
-                return None, None, f"⏱ Video is longer than {MAX_DURATION // 60} minutes"
+                return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
             if "max-filesize" in err.lower() or "filesize" in err.lower():
                 return None, None, "📦 Video exceeds 50 MB size limit"
             return None, None, f"yt-dlp error: {err[:200]}"
+
+        if not stdout:
+            logger.warning(f"yt-dlp video returned no stdout for {video_id} (likely filtered out by duration)")
+            return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
 
         info = json.loads(stdout) if stdout else {}
         filepath = info.get("_filename") or info.get("filename")
@@ -270,19 +280,24 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
         return None, None, f"Error: {e}"
 
 
-async def _download_audio(video_id: str, output_dir: str) -> tuple[str | None, dict | None, str | None]:
+async def _download_audio(video_id: str, output_dir: str, duration: int) -> tuple[str | None, dict | None, str | None]:
     """Download audio. Returns (filepath, info_dict, error_string)."""
-    # Use video_id in filename for reliable file finding after conversion
+    # Hybrid strategy: MP3 128k for short, Opus 64k for long
+    if duration <= 1800:
+        fmt = "mp3"
+        pp_args = ["--postprocessor-args", "ExtractAudio:-b:a 128k"]
+    else:
+        fmt = "opus"
+        pp_args = ["--postprocessor-args", "ffmpeg:-ac 1 -ar 24000 -b:a 64k"]
+
     out_template = os.path.join(output_dir, f"{video_id}.%(ext)s")
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "--match-filter", f"duration<={MAX_DURATION}",
+        "--match-filter", f"duration<={MAX_DURATION_AUDIO}",
         "-x",
-        "--audio-format", "mp3",
-        "--audio-quality", "128K",
-        # NOTE: no --max-filesize here! It checks SOURCE video size,
-        # not the extracted audio. A 200MB video produces a tiny MP3.
+        "--audio-format", fmt,
+    ] + pp_args + [
         "--no-warnings",
         "--print-json",
         "-o", out_template,
@@ -299,7 +314,7 @@ async def _download_audio(video_id: str, output_dir: str) -> tuple[str | None, d
             err = stderr.decode(errors='replace').strip()
             logger.error(f"yt-dlp audio failed (rc={proc.returncode}) for {video_id}: {err[:500]}")
             if "duration" in err.lower() or "filter" in err.lower():
-                return None, None, f"⏱ Video is longer than {MAX_DURATION // 60} minutes"
+                return None, None, f"⏱ Audio is longer than {MAX_DURATION_AUDIO // 60} minutes"
             return None, None, f"yt-dlp error: {err[:200]}"
 
         # Log raw output for debugging
@@ -318,29 +333,27 @@ async def _download_audio(video_id: str, output_dir: str) -> tuple[str | None, d
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse yt-dlp JSON: {e}. First 200 chars: {stdout_text[:200]}")
         else:
-            logger.warning(f"yt-dlp audio returned no stdout for {video_id}")
+            logger.warning(f"yt-dlp audio returned no stdout for {video_id} (likely filtered out by duration)")
+            return None, None, f"⏱ Audio is longer than {MAX_DURATION_AUDIO // 60} minutes"
 
-        # After -x conversion, the original file is deleted and replaced with .mp3
-        # The JSON _filename points to the PRE-conversion file, so we search by video_id
+        # After -x conversion, search by video_id and format
         filepath = None
-
-        # Try the expected mp3 path first
-        expected_mp3 = os.path.join(output_dir, f"{video_id}.mp3")
-        if os.path.exists(expected_mp3):
-            filepath = expected_mp3
+        expected_path = os.path.join(output_dir, f"{video_id}.{fmt}")
+        if os.path.exists(expected_path):
+            filepath = expected_path
         else:
             # Fallback: try JSON filename with different extensions
             json_path = info.get("_filename") or info.get("filename")
             if json_path:
                 base = os.path.splitext(json_path)[0]
-                for ext in ['.mp3', '.m4a', '.opus', '.ogg', '.webm']:
+                for ext in ['.mp3', '.opus', '.m4a', '.webm']:
                     candidate = base + ext
                     if os.path.exists(candidate):
                         filepath = candidate
                         break
             # Last resort: scan directory
             if not filepath:
-                filepath = _find_file_in_dir(output_dir, ['.mp3', '.m4a', '.opus', '.ogg', '.webm'])
+                filepath = _find_file_in_dir(output_dir, ['.mp3', '.opus', '.m4a', '.webm'])
 
         if filepath and os.path.exists(filepath):
             logger.info(f"Audio file found: {filepath} ({os.path.getsize(filepath)} bytes)")
@@ -393,11 +406,21 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
         await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path)
         return
 
-    # 3. Wait for lock if already downloading same ID
+    # 3. Fetch info to know duration for audio strategy
+    info = await _fetch_video_info(video_id)
+    if not info:
+        _react(bot, accid, req_msg_id, "❌")
+        _send(bot, accid, chat_id, "❌ Could not fetch video info")
+        return
+    
+    duration = int(info.get("duration", 0))
+
+    # 4. Wait for lock if already downloading same ID
     async with _download_locks[video_id + download_type]:
         # Check cache again after getting lock
+        cache_path = _get_cache_path(video_id, download_type)
         if os.path.exists(cache_path):
-            await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path)
+            await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
             return
 
         # ⏳ React: downloading
@@ -410,7 +433,7 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
                 if download_type == "video":
                     filepath, info, error = await _download_video(video_id, tmpdir)
                 else:
-                    filepath, info, error = await _download_audio(video_id, tmpdir)
+                    filepath, info, error = await _download_audio(video_id, tmpdir, duration)
 
                 if error:
                     last_error = error
@@ -468,10 +491,11 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
     dur_str = _format_duration(int(duration)) if duration else "?"
     size_str = _format_size(filesize)
 
+    ext = os.path.splitext(filepath)[1].lower().replace(".", "").upper()
     if download_type == "video":
-        caption = f"📺 {title} ({dur_str}, {size_str})\n\n🔗 https://youtu.be/{video_id}"
+        caption = f"📺 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 https://youtu.be/{video_id}"
     else:
-        caption = f"🎵 {title} ({dur_str}, {size_str})\n\n🔗 https://youtu.be/{video_id}"
+        caption = f"🎵 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 https://youtu.be/{video_id}"
 
     _send(bot, accid, chat_id, caption, file=filepath)
 
@@ -588,7 +612,7 @@ def _get_help_text(bot, accid, from_id):
         f"/donate — Support development ❤️\n"
         f"/help — This message\n\n"
         f"💡 _You can also just paste a YouTube link and I'll show you download options._\n\n"
-        f"⏱ Max video duration: {MAX_DURATION // 60} min | Max file size: 50 MB\n"
+        f"⏱ Max duration: video {MAX_DURATION_VIDEO // 60}m, audio {MAX_DURATION_AUDIO // 60}m | Max file: 50 MB\n"
     )
 
     admin_email = database.get_config("admin_dc_email")
@@ -686,19 +710,24 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     duration = info.get("duration", 0)
     dur_str = _format_duration(int(duration)) if duration else "?"
 
-    if duration and duration > MAX_DURATION:
-        reply = (
-            f"📺 YouTube: \"{title}\" ({dur_str})\n\n"
-            f"⚠️ Video is longer than {MAX_DURATION // 60} minutes, download not available."
-        )
-    else:
-        reply = (
-            f"📺 YouTube: \"{title}\" ({dur_str})\n\n"
-            f"Download video 480p: /yt_{video_id}\n"
-            f"Download audio mp3: /ytm_{video_id}"
-        )
+    audio_fmt = "MP3" if duration <= 1800 else "Opus"
+    
+    can_video = duration <= MAX_DURATION_VIDEO
+    can_audio = duration <= MAX_DURATION_AUDIO
 
-    _send(bot, accid, msg.chat_id, reply)
+    lines = [f"📺 YouTube: \"{title}\" ({dur_str})", ""]
+    
+    if can_video:
+        lines.append(f"Download video 480p: /yt_{video_id}")
+    else:
+        lines.append(f"⚠️ Video too long (> {MAX_DURATION_VIDEO // 60}m)")
+        
+    if can_audio:
+        lines.append(f"Download audio {audio_fmt}: /ytm_{video_id}")
+    else:
+        lines.append(f"⚠️ Audio too long (> {MAX_DURATION_AUDIO // 60}m)")
+
+    _send(bot, accid, msg.chat_id, "\n".join(lines))
 
 
 async def _cache_cleaner_loop():
