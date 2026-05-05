@@ -329,8 +329,14 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
         "yt-dlp", "--no-playlist", "--dump-json", "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-        url
     ]
+    
+    cookies_path = os.path.join("data", "cookies.txt")
+    if os.path.exists(cookies_path):
+        cmd.extend(["--cookies", cookies_path])
+        
+    cmd.append(url)
+    
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -364,8 +370,14 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
         "--print-json",
         "-o", out_template,
-        _make_yt_url(video_id)
     ]
+    
+    cookies_path = os.path.join("data", "cookies.txt")
+    if os.path.exists(cookies_path):
+        cmd.extend(["--cookies", cookies_path])
+        
+    cmd.append(_make_yt_url(video_id))
+    
     try:
         async with _download_semaphore:
             proc = await asyncio.create_subprocess_exec(
@@ -440,8 +452,14 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
         "--print-json",
         "-o", out_template,
-        _make_yt_url(video_id)
     ]
+    
+    cookies_path = os.path.join("data", "cookies.txt")
+    if os.path.exists(cookies_path):
+        cmd.extend(["--cookies", cookies_path])
+        
+    cmd.append(_make_yt_url(video_id))
+    
     try:
         async with _download_semaphore:
             proc = await asyncio.create_subprocess_exec(
