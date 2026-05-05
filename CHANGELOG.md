@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [1.3.0] - 2026-05-05
 6: 
 7: ### Added
-8: - **Multi-Service Support:** Support for PeerTube, Vimeo, VK, Twitter, Reddit, Instagram, TikTok, and more.
+8: - **Multi-Service Support:** Support for PeerTube, Rutube, Vimeo, VK, Twitter, Reddit, Instagram, TikTok, and more.
 9: - **Thumbnail Previews:** Info messages now include a video thumbnail preview.
 10: - **Generic URL Handling:** The `/yt` and `/ytm` commands now accept any valid URL.
 11: 
