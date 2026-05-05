@@ -1,0 +1,11 @@
+services:
+  yt_bot:
+    container_name: deltachat_yt_bot
+    build: .
+    restart: always
+    volumes:
+      - ./data:/app/data
+      - ./data/ytbot:/root/.config/ytbot
+    environment:
+      - DC_DB_DIR=/app/data
+      - DB_PATH=/app/data/ytbot.db

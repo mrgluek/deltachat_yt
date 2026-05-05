@@ -1,0 +1,628 @@
+import asyncio
+import json
+import logging
+import os
+import re
+import tempfile
+import threading
+import time
+
+from deltachat2 import events, MsgData
+from deltabot_cli import BotCli
+
+import database
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("yt_bot")
+
+dc_cli = BotCli("ytbot")
+
+# Global references
+dc_bot_instance = None
+dc_accid = None
+
+# Rate limiting: {from_id: last_request_timestamp}
+_user_rate_limits: dict[int, float] = {}
+RATE_LIMIT_SECONDS = 60
+
+# Global download semaphore (max 5 concurrent)
+_download_semaphore = asyncio.Semaphore(5)
+_download_loop = None
+
+# Max video duration in seconds
+MAX_DURATION = 600  # 10 minutes
+
+# YouTube URL patterns
+YT_URL_RE = re.compile(
+    r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)'
+    r'([a-zA-Z0-9_-]{11})'
+)
+YT_ID_RE = re.compile(r'^[a-zA-Z0-9_-]{11}$')
+
+
+def _make_yt_url(video_id: str) -> str:
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def _extract_video_id(text: str) -> str | None:
+    """Extract YouTube video ID from URL or raw ID."""
+    text = text.strip()
+    m = YT_URL_RE.search(text)
+    if m:
+        return m.group(1)
+    if YT_ID_RE.match(text):
+        return text
+    return None
+
+
+def _format_duration(seconds: int) -> str:
+    if seconds < 0:
+        return "?"
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def _format_size(size_bytes: int) -> str:
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.0f} KB"
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+# ── Admin helpers (from deltachat_ntfy pattern) ──
+
+def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
+    if contact:
+        get_val = getattr(contact, 'get', lambda k: getattr(contact, k, None))
+        for attr in ['fingerprint', 'key_fingerprint', 'public_key']:
+            val = get_val(attr)
+            if val:
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', '').replace(':', ''))
+                if matches:
+                    return matches[0].upper()
+    try:
+        fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
+        if fp:
+            return fp.upper().replace(' ', '')
+    except Exception:
+        pass
+    for args in [(accid, contact_id), (contact_id,)]:
+        try:
+            enc_info = bot.rpc.get_contact_encryption_info(*args)
+            if enc_info:
+                cleaned = "".join(enc_info.split()).replace(':', '')
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', cleaned)
+                if matches:
+                    return ",".join(matches).upper()
+        except Exception:
+            continue
+    return None
+
+
+def _is_dc_admin(bot, accid, contact_id):
+    try:
+        contact = None
+        try:
+            contact = bot.rpc.get_contact(accid, contact_id)
+        except Exception:
+            pass
+        admin_fp = database.get_admin_fingerprint()
+        if admin_fp:
+            c_fp = _get_contact_fingerprint(bot, accid, contact_id, contact=contact)
+            if c_fp:
+                if admin_fp.upper() in c_fp.upper().split(','):
+                    return True
+                return False
+        if contact:
+            admin_email = database.get_config("admin_dc_email")
+            if admin_email and admin_email.lower() == contact.address.lower():
+                return True
+    except Exception as e:
+        logger.error(f"Admin check error: {e}")
+    return False
+
+
+def _is_rate_limited(bot, accid, from_id) -> bool:
+    """Returns True if user is rate limited. Admin is exempt."""
+    if _is_dc_admin(bot, accid, from_id):
+        return False
+    now = time.time()
+    last = _user_rate_limits.get(from_id, 0)
+    if now - last < RATE_LIMIT_SECONDS:
+        return True
+    _user_rate_limits[from_id] = now
+    return False
+
+
+def _send(bot, accid, chat_id, text, file=None):
+    """Send a message and track transport stats."""
+    msg_data = MsgData(text=text)
+    if file:
+        msg_data.file = file
+    try:
+        msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
+        try:
+            addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
+            if addr:
+                database.increment_transport_sent(addr)
+        except Exception:
+            pass
+        return msg_id
+    except Exception as e:
+        logger.error(f"Failed to send msg to chat {chat_id}: {e}")
+        raise
+
+
+def _react(bot, accid, msg_id, emoji: str):
+    """Set a reaction on a message."""
+    try:
+        bot.rpc.send_reaction(accid, msg_id, [emoji])
+    except Exception as e:
+        logger.debug(f"Failed to set reaction on msg {msg_id}: {e}")
+
+
+# ── yt-dlp wrappers ──
+
+async def _fetch_video_info(video_id: str) -> dict | None:
+    """Fetch video metadata without downloading."""
+    cmd = [
+        "yt-dlp", "--no-playlist", "--dump-json", "--no-warnings",
+        _make_yt_url(video_id)
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        if proc.returncode == 0 and stdout:
+            return json.loads(stdout)
+    except Exception as e:
+        logger.error(f"Failed to fetch info for {video_id}: {e}")
+    return None
+
+
+async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, dict | None, str | None]:
+    """Download video. Returns (filepath, info_dict, error_string)."""
+    out_template = os.path.join(output_dir, "%(title).50s.%(ext)s")
+    cmd = [
+        "yt-dlp",
+        "--no-playlist",
+        "--match-filter", f"duration<={MAX_DURATION}",
+        "-S", "vcodec:h264,res:480,acodec:aac,+size",
+        "--max-filesize", "50M",
+        "--merge-output-format", "mp4",
+        "--no-warnings",
+        "--print-json",
+        "-o", out_template,
+        _make_yt_url(video_id)
+    ]
+    try:
+        async with _download_semaphore:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+
+        if proc.returncode != 0:
+            err = stderr.decode(errors='replace').strip()
+            if "duration" in err.lower() or "filter" in err.lower():
+                return None, None, f"⏱ Video is longer than {MAX_DURATION // 60} minutes"
+            if "max-filesize" in err.lower() or "filesize" in err.lower():
+                return None, None, "📦 Video exceeds 50 MB size limit"
+            return None, None, f"yt-dlp error: {err[:200]}"
+
+        info = json.loads(stdout) if stdout else {}
+        filepath = info.get("_filename") or info.get("filename")
+        if filepath and os.path.exists(filepath):
+            size = os.path.getsize(filepath)
+            if size > 50 * 1024 * 1024:
+                os.remove(filepath)
+                return None, info, "📦 Downloaded file exceeds 50 MB"
+            return filepath, info, None
+        return None, info, "Download completed but file not found"
+    except asyncio.TimeoutError:
+        return None, None, "⏱ Download timed out (5 min limit)"
+    except Exception as e:
+        return None, None, f"Error: {e}"
+
+
+async def _download_audio(video_id: str, output_dir: str) -> tuple[str | None, dict | None, str | None]:
+    """Download audio. Returns (filepath, info_dict, error_string)."""
+    out_template = os.path.join(output_dir, "%(title).50s.%(ext)s")
+    cmd = [
+        "yt-dlp",
+        "--no-playlist",
+        "--match-filter", f"duration<={MAX_DURATION}",
+        "-x",
+        "--audio-format", "mp3",
+        "--audio-quality", "128K",
+        "--max-filesize", "50M",
+        "--no-warnings",
+        "--print-json",
+        "-o", out_template,
+        _make_yt_url(video_id)
+    ]
+    try:
+        async with _download_semaphore:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+
+        if proc.returncode != 0:
+            err = stderr.decode(errors='replace').strip()
+            if "duration" in err.lower() or "filter" in err.lower():
+                return None, None, f"⏱ Video is longer than {MAX_DURATION // 60} minutes"
+            return None, None, f"yt-dlp error: {err[:200]}"
+
+        info = json.loads(stdout) if stdout else {}
+        # yt-dlp with -x changes extension; find the actual file
+        filepath = info.get("_filename") or info.get("filename")
+        if filepath:
+            # The file might have been converted to .mp3
+            base = os.path.splitext(filepath)[0]
+            for ext in ['.mp3', '.m4a', '.opus', '.ogg', '.webm']:
+                candidate = base + ext
+                if os.path.exists(candidate):
+                    filepath = candidate
+                    break
+        if filepath and os.path.exists(filepath):
+            size = os.path.getsize(filepath)
+            if size > 50 * 1024 * 1024:
+                os.remove(filepath)
+                return None, info, "📦 Audio file exceeds 50 MB"
+            return filepath, info, None
+        return None, info, "Download completed but file not found"
+    except asyncio.TimeoutError:
+        return None, None, "⏱ Download timed out (5 min limit)"
+    except Exception as e:
+        return None, None, f"Error: {e}"
+
+
+def _run_download(bot, accid, msg, video_id: str, download_type: str):
+    """Run download in a background thread with its own event loop."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_do_download(bot, accid, msg, video_id, download_type))
+    finally:
+        loop.close()
+
+
+async def _do_download(bot, accid, msg, video_id: str, download_type: str):
+    """Actual download + send logic."""
+    chat_id = msg.chat_id
+    req_msg_id = msg.id
+
+    # ⏳ React: downloading
+    _react(bot, accid, req_msg_id, "⏳")
+
+    tmpdir = tempfile.mkdtemp(prefix="ytbot_")
+    try:
+        if download_type == "video":
+            filepath, info, error = await _download_video(video_id, tmpdir)
+        else:
+            filepath, info, error = await _download_audio(video_id, tmpdir)
+
+        if error:
+            _react(bot, accid, req_msg_id, "❌")
+            _send(bot, accid, chat_id, f"❌ {error}")
+            return
+
+        if not filepath:
+            _react(bot, accid, req_msg_id, "❌")
+            _send(bot, accid, chat_id, "❌ Download failed: file not found")
+            return
+
+        # ⌛ React: sending to chat
+        _react(bot, accid, req_msg_id, "⌛")
+
+        title = (info or {}).get("title", video_id)
+        duration = (info or {}).get("duration", 0)
+        filesize = os.path.getsize(filepath)
+        dur_str = _format_duration(int(duration)) if duration else "?"
+        size_str = _format_size(filesize)
+
+        if download_type == "video":
+            caption = f"📺 {title} ({dur_str}, {size_str})"
+        else:
+            caption = f"🎵 {title} ({dur_str}, {size_str})"
+
+        _send(bot, accid, chat_id, caption, file=filepath)
+
+        # ☑️ React: done
+        _react(bot, accid, req_msg_id, "☑️")
+
+        # Record in DB
+        database.add_download(chat_id, msg.from_id, video_id, title, int(duration or 0), download_type, filesize)
+
+    finally:
+        # Cleanup temp dir
+        import shutil
+        try:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _handle_download_command(bot, accid, event, download_type: str, payload: str):
+    """Common handler for /yt and /ytm commands."""
+    msg = event.msg
+    video_id = _extract_video_id(payload)
+    if not video_id:
+        _send(bot, accid, msg.chat_id,
+              f"Usage: /{download_type == 'video' and 'yt' or 'ytm'} <youtube_url_or_video_id>")
+        return
+
+    if _is_rate_limited(bot, accid, msg.from_id):
+        _send(bot, accid, msg.chat_id, f"⏱ Please wait {RATE_LIMIT_SECONDS}s between downloads.")
+        return
+
+    # Start download in background thread
+    t = threading.Thread(target=_run_download, args=(bot, accid, msg, video_id, download_type), daemon=True)
+    t.start()
+
+
+# ── Delta Chat command handlers ──
+
+@dc_cli.on(events.NewMessage(command="/yt"))
+def yt_command(bot, accid, event):
+    """Download YouTube video."""
+    _handle_download_command(bot, accid, event, "video", event.payload.strip())
+
+
+@dc_cli.on(events.NewMessage(command="/ytm"))
+def ytm_command(bot, accid, event):
+    """Download YouTube audio."""
+    _handle_download_command(bot, accid, event, "audio", event.payload.strip())
+
+
+@dc_cli.on(events.NewMessage(command="/help"))
+def help_command(bot, accid, event):
+    msg = event.msg
+    help_text = _get_help_text(bot, accid, msg.from_id)
+    _send(bot, accid, msg.chat_id, help_text)
+
+
+@dc_cli.on(events.NewMessage(command="/stats"))
+def stats_command(bot, accid, event):
+    msg = event.msg
+    s = database.get_stats()
+    videos = s["by_type"].get("video", 0)
+    audios = s["by_type"].get("audio", 0)
+    reply = (
+        f"📊 **YT Bot Statistics**\n\n"
+        f"Total downloads: {s['total']} ({videos} video, {audios} audio)\n"
+        f"Last 24h: {s['last_24h']}\n"
+        f"Total data: {_format_size(s['total_size'])}"
+    )
+    _send(bot, accid, msg.chat_id, reply)
+
+
+@dc_cli.on(events.NewMessage(command="/donate"))
+def donate_command(bot, accid, event):
+    msg = event.msg
+    _send(bot, accid, msg.chat_id,
+          "❤️ Support Bot Development\n\n"
+          "If you find this bot useful, you can support its development:\n\n"
+          "☕️ Ko-fi: https://ko-fi.com/gluek (🌍 world cards, paypal)\n"
+          "🚀 Tribute: https://web.tribute.tg/d/IWb (🇷🇺 russian cards, SBP)\n\n"
+          "Thank you! 🙏")
+
+
+@dc_cli.on(events.NewMessage(command="/initadmin"))
+def initadmin_command(bot, accid, event):
+    msg = event.msg
+    admin_email = database.get_config("admin_dc_email")
+    admin_fp = database.get_admin_fingerprint()
+
+    if admin_email or admin_fp:
+        _send(bot, accid, msg.chat_id, "❌ Admin is already set. Use `set_admin.py` on the server to change.")
+        return
+
+    contact = bot.rpc.get_contact(accid, msg.from_id)
+    email = contact.address
+    database.set_config("admin_dc_email", email)
+
+    fp = _get_contact_fingerprint(bot, accid, msg.from_id, contact=contact)
+    if fp:
+        first_fp = fp.split(',')[0]
+        database.set_admin_fingerprint(first_fp)
+        _send(bot, accid, msg.chat_id,
+              f"✅ You are now the admin!\n\nEmail: `{email}`\nFingerprint: `{first_fp[-8:]}`")
+    else:
+        _send(bot, accid, msg.chat_id,
+              f"✅ You are now the admin!\n\nEmail: `{email}`\n⚠️ Fingerprint not available yet (will be used after key exchange).")
+
+
+def _get_help_text(bot, accid, from_id):
+    contact = bot.rpc.get_contact(accid, from_id)
+    sender_email = contact.address
+
+    help_text = (
+        f"👋 Hi {sender_email}!\n\n"
+        f"I download YouTube videos and audio.\n\n"
+        f"**Commands:**\n"
+        f"/yt <url> — Download video (MP4 480p, ≤50MB)\n"
+        f"/yt_<video_id> — Download video by ID\n"
+        f"/ytm <url> — Download audio (MP3 128kbps)\n"
+        f"/ytm_<video_id> — Download audio by ID\n"
+        f"/stats — Download statistics\n"
+        f"/donate — Support development ❤️\n"
+        f"/help — This message\n\n"
+        f"💡 _You can also just paste a YouTube link and I'll show you download options._\n\n"
+        f"⏱ Max video duration: {MAX_DURATION // 60} min | Max file size: 50 MB\n"
+    )
+
+    admin_email = database.get_config("admin_dc_email")
+    if not admin_email:
+        help_text += "\n/initadmin — Claim bot ownership\n"
+    elif _is_dc_admin(bot, accid, from_id):
+        help_text += f"\n👑 **Admin:** `{admin_email}`\n"
+
+    return help_text
+
+
+# ── YouTube link auto-detection and /yt_ID, /ytm_ID handlers ──
+
+@dc_cli.on(events.NewMessage)
+def on_new_message(bot, accid, event):
+    msg = event.msg
+    if msg.is_info:
+        return
+
+    # Track receiving stats
+    try:
+        addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
+        if addr:
+            database.increment_transport_received(addr)
+    except Exception:
+        pass
+
+    text = (msg.text or "").strip()
+    if not text:
+        return
+
+    # 1. Handle /yt_VIDEOID and /ytm_VIDEOID commands
+    m = re.match(r'^/yt_([a-zA-Z0-9_-]{11})$', text)
+    if m:
+        video_id = m.group(1)
+        if _is_rate_limited(bot, accid, msg.from_id):
+            _send(bot, accid, msg.chat_id, f"⏱ Please wait {RATE_LIMIT_SECONDS}s between downloads.")
+            return
+        t = threading.Thread(target=_run_download, args=(bot, accid, msg, video_id, "video"), daemon=True)
+        t.start()
+        return
+
+    m = re.match(r'^/ytm_([a-zA-Z0-9_-]{11})$', text)
+    if m:
+        video_id = m.group(1)
+        if _is_rate_limited(bot, accid, msg.from_id):
+            _send(bot, accid, msg.chat_id, f"⏱ Please wait {RATE_LIMIT_SECONDS}s between downloads.")
+            return
+        t = threading.Thread(target=_run_download, args=(bot, accid, msg, video_id, "audio"), daemon=True)
+        t.start()
+        return
+
+    # 2. Auto-detect YouTube links and respond with info
+    if text.startswith('/'):
+        return  # Don't process other commands
+
+    yt_match = YT_URL_RE.search(text)
+    if yt_match:
+        video_id = yt_match.group(1)
+        t = threading.Thread(target=_handle_link_info, args=(bot, accid, msg, video_id), daemon=True)
+        t.start()
+        return
+
+    # 3. Welcome new users in private chats
+    try:
+        chat_info = bot.rpc.get_basic_chat_info(accid, msg.chat_id)
+        is_private = False
+        if isinstance(chat_info, dict):
+            is_private = (chat_info.get("type") == 1)
+        else:
+            is_private = (getattr(chat_info, "type", 1) == 1)
+
+        if is_private:
+            if not bot.rpc.get_contact_config(accid, msg.from_id, "greeted"):
+                help_text = _get_help_text(bot, accid, msg.from_id)
+                _send(bot, accid, msg.chat_id, f"👋 Welcome to YT Bot!\n\n{help_text}")
+                bot.rpc.set_contact_config(accid, msg.from_id, "greeted", "1")
+    except Exception as e:
+        logger.error(f"Greeting check error: {e}")
+
+
+def _handle_link_info(bot, accid, msg, video_id: str):
+    """Fetch video info and reply with download commands."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        info = loop.run_until_complete(_fetch_video_info(video_id))
+    finally:
+        loop.close()
+
+    if not info:
+        return  # Silently ignore if we can't fetch info
+
+    title = info.get("title", "Unknown")
+    duration = info.get("duration", 0)
+    dur_str = _format_duration(int(duration)) if duration else "?"
+
+    if duration and duration > MAX_DURATION:
+        reply = (
+            f"📺 YouTube: \"{title}\" ({dur_str})\n\n"
+            f"⚠️ Video is longer than {MAX_DURATION // 60} minutes, download not available."
+        )
+    else:
+        reply = (
+            f"📺 YouTube: \"{title}\" ({dur_str})\n\n"
+            f"Download video 480p: /yt_{video_id}\n"
+            f"Download audio mp3: /ytm_{video_id}"
+        )
+
+    _send(bot, accid, msg.chat_id, reply)
+
+
+# ── Bot lifecycle ──
+
+@dc_cli.on_init
+def on_init(bot, args):
+    global dc_bot_instance, dc_accid
+    bot.logger.info("Initializing YT Bot...")
+    dc_bot_instance = bot
+
+    for accid in bot.rpc.get_all_account_ids():
+        dc_accid = accid
+        bot.rpc.set_config(accid, "displayname", "YT Bot")
+        bot.rpc.set_config(accid, "selfstatus",
+                           "I download YouTube videos and audio. Send /help for commands.")
+        bot.rpc.set_config(accid, "delete_device_after", "604800")
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            for icon_name in ["icon.png", os.path.join("data", "icon.png")]:
+                icon_path = os.path.join(base_dir, icon_name)
+                if os.path.exists(icon_path):
+                    bot.rpc.set_config(accid, "selfavatar", icon_path)
+                    break
+        except Exception as e:
+            bot.logger.warning(f"Could not set avatar: {e}")
+
+
+@dc_cli.on_start
+def on_start(bot, _args):
+    global dc_bot_instance, dc_accid
+    dc_bot_instance = bot
+    accounts = bot.rpc.get_all_account_ids()
+    if accounts:
+        dc_accid = accounts[0]
+        try:
+            import io
+            try:
+                import qrcode
+            except ImportError:
+                qrcode = None
+
+            qrdata = bot.rpc.get_chat_securejoin_qr_code(dc_accid, None)
+            print("\n" + "=" * 50)
+            print("To add this bot, scan the QR code or copy the link:\n")
+            if qrcode:
+                qr = qrcode.QRCode(version=1, box_size=1, border=2)
+                qr.add_data(qrdata)
+                qr.make(fit=True)
+                f = io.StringIO()
+                qr.print_ascii(out=f)
+                print(f.getvalue())
+            print(qrdata)
+            print("\n" + "=" * 50 + "\n")
+        except Exception as e:
+            bot.logger.error(f"Failed to generate QR code: {e}")
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) == 1:
+        sys.argv.append("serve")
+    dc_cli.start()
