@@ -56,14 +56,14 @@ _download_locks: dict[str, RefCountLock] = {}
 _processed_msg_ids = set()
 _processed_msg_lock = threading.Lock()
 
-def _is_duplicate_msg(msg_id: int) -> bool:
+def _is_duplicate_msg(msg_id: int, handler: str) -> bool:
     with _processed_msg_lock:
-        if msg_id in _processed_msg_ids:
+        key = f"{handler}_{msg_id}"
+        if key in _processed_msg_ids:
             return True
-        _processed_msg_ids.add(msg_id)
+        _processed_msg_ids.add(key)
         if len(_processed_msg_ids) > 1000:
             # Simple cleanup, keep only the latest 500 to avoid memory leak
-            # Since we just want to debounce immediate duplicates, this is fine
             latest = list(_processed_msg_ids)[-500:]
             _processed_msg_ids.clear()
             _processed_msg_ids.update(latest)
@@ -614,7 +614,7 @@ def _handle_download_command(bot, accid, event, download_type: str, payload: str
     """Common handler for /yt and /ytm commands."""
     msg = event.msg
     
-    if _is_duplicate_msg(msg.id):
+    if _is_duplicate_msg(msg.id, "cmd"):
         return
         
     video_id = _extract_video_id(payload)
@@ -762,7 +762,7 @@ def _get_help_text(bot, accid, from_id):
 def on_new_message(bot, accid, event):
     msg = event.msg
     
-    if _is_duplicate_msg(msg.id):
+    if _is_duplicate_msg(msg.id, "text"):
         return
         
     # 0. Safety checks: ignore info msgs, wrong account, or outbound msgs
