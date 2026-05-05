@@ -725,18 +725,34 @@ def _handle_link_info(bot, accid, msg, video_id: str):
 
     audio_fmt = "MP3" if duration <= 1800 else "Opus"
     
+    # Size estimation
+    video_size_str = "?? MB"
+    audio_size_str = "?? MB"
+    if duration:
+        # Audio: (duration * bitrate_kbps) / (8 * 1024)
+        bitrate = 128 if duration <= 1800 else 64
+        audio_mb = (duration * bitrate) / 8192
+        audio_size_str = f"{audio_mb:.1f} MB"
+        
+        # Video 480p estimation: roughly 1.2 Mbps (0.15 MB/s)
+        video_mb = duration * 0.15
+        # If yt-dlp gave us an approximation, use it but cap at 50MB for the UI
+        if info.get('filesize_approx'):
+            video_mb = info['filesize_approx'] / 1048576
+        video_size_str = f"{min(video_mb, 50.0):.1f} MB"
+
     can_video = duration <= MAX_DURATION_VIDEO
     can_audio = duration <= MAX_DURATION_AUDIO
 
     lines = [f"📺 YouTube: \"{title}\" ({dur_str})", ""]
     
     if can_video:
-        lines.append(f"Download video 480p: /yt_{video_id}")
+        lines.append(f"Download video 480p ({video_size_str}): /yt_{video_id}")
     else:
         lines.append(f"⚠️ Video too long (> {MAX_DURATION_VIDEO // 60}m)")
         
     if can_audio:
-        lines.append(f"Download audio {audio_fmt}: /ytm_{video_id}")
+        lines.append(f"Download audio {audio_fmt} ({audio_size_str}): /ytm_{video_id}")
     else:
         lines.append(f"⚠️ Audio too long (> {MAX_DURATION_AUDIO // 60}m)")
 
