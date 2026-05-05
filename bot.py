@@ -184,6 +184,17 @@ def _get_cache_path(video_id: str, download_type: str) -> str:
 
 # ── yt-dlp wrappers ──
 
+def _find_file_in_dir(directory: str, extensions: list[str]) -> str | None:
+    """Find the first file in directory matching any of the given extensions."""
+    if not os.path.isdir(directory):
+        return None
+    for f in os.listdir(directory):
+        fpath = os.path.join(directory, f)
+        if os.path.isfile(fpath) and any(f.lower().endswith(ext) for ext in extensions):
+            return fpath
+    return None
+
+
 async def _fetch_video_info(video_id: str) -> dict | None:
     """Fetch video metadata without downloading."""
     cmd = [
@@ -234,6 +245,18 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
 
         info = json.loads(stdout) if stdout else {}
         filepath = info.get("_filename") or info.get("filename")
+        # yt-dlp may report a pre-merge filename; try alternatives
+        if not filepath or not os.path.exists(filepath):
+            if filepath:
+                base = os.path.splitext(filepath)[0]
+                for ext in ['.mp4', '.mkv', '.webm']:
+                    candidate = base + ext
+                    if os.path.exists(candidate):
+                        filepath = candidate
+                        break
+            # Last resort: find any video file in the output dir
+            if not filepath or not os.path.exists(filepath):
+                filepath = _find_file_in_dir(output_dir, ['.mp4', '.mkv', '.webm'])
         if filepath and os.path.exists(filepath):
             size = os.path.getsize(filepath)
             if size > 50 * 1024 * 1024:
@@ -287,6 +310,9 @@ async def _download_audio(video_id: str, output_dir: str) -> tuple[str | None, d
                 if os.path.exists(candidate):
                     filepath = candidate
                     break
+        # Last resort: find any audio file in the output dir
+        if not filepath or not os.path.exists(filepath):
+            filepath = _find_file_in_dir(output_dir, ['.mp3', '.m4a', '.opus', '.ogg', '.webm'])
         if filepath and os.path.exists(filepath):
             size = os.path.getsize(filepath)
             if size > 50 * 1024 * 1024:
@@ -340,34 +366,51 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
         # ⏳ React: downloading
         _react(bot, accid, req_msg_id, "⏳")
 
-        tmpdir = tempfile.mkdtemp(prefix="ytbot_")
-        try:
-            if download_type == "video":
-                filepath, info, error = await _download_video(video_id, tmpdir)
-            else:
-                filepath, info, error = await _download_audio(video_id, tmpdir)
+        last_error = None
+        for attempt in range(2):  # Try up to 2 times
+            tmpdir = tempfile.mkdtemp(prefix="ytbot_")
+            try:
+                if download_type == "video":
+                    filepath, info, error = await _download_video(video_id, tmpdir)
+                else:
+                    filepath, info, error = await _download_audio(video_id, tmpdir)
 
-            if error:
-                _react(bot, accid, req_msg_id, "❌")
-                _send(bot, accid, chat_id, f"❌ {error}")
-                return
+                if error:
+                    last_error = error
+                    # Retry only for "file not found" errors
+                    if "file not found" in error.lower() and attempt == 0:
+                        logger.warning(f"Attempt {attempt+1} failed for {video_id}: {error}, retrying...")
+                        continue
+                    _react(bot, accid, req_msg_id, "❌")
+                    _send(bot, accid, chat_id, f"❌ {error}")
+                    return
 
-            if not filepath or not os.path.exists(filepath):
-                _react(bot, accid, req_msg_id, "❌")
-                _send(bot, accid, chat_id, "❌ Download failed: file not found")
-                return
+                if not filepath or not os.path.exists(filepath):
+                    last_error = "Download failed: file not found"
+                    if attempt == 0:
+                        logger.warning(f"Attempt {attempt+1}: file not found for {video_id}, retrying...")
+                        continue
+                    _react(bot, accid, req_msg_id, "❌")
+                    _send(bot, accid, chat_id, f"❌ {last_error}")
+                    return
 
-            # Move to cache
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            shutil.move(filepath, cache_path)
-            
-            await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
+                # Move to cache
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                shutil.move(filepath, cache_path)
+                
+                await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
+                return  # Success!
 
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            # Cleanup locks dict to prevent memory leak
-            if video_id + download_type in _download_locks:
-                del _download_locks[video_id + download_type]
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+
+        # All attempts failed
+        _react(bot, accid, req_msg_id, "❌")
+        _send(bot, accid, chat_id, f"❌ {last_error or 'Download failed after retry'}")
+
+        # Cleanup lock
+        if video_id + download_type in _download_locks:
+            del _download_locks[video_id + download_type]
 
 
 async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, info=None):
