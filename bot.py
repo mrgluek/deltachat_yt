@@ -1,8 +1,10 @@
 import asyncio
+import collections
 import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 import threading
 import time
@@ -25,12 +27,23 @@ dc_accid = None
 _user_rate_limits: dict[int, float] = {}
 RATE_LIMIT_SECONDS = 60
 
+# Anti-spam: {chat_id: {video_id_type: timestamp}}
+_chat_anti_spam: dict[int, dict[str, float]] = collections.defaultdict(dict)
+ANTI_SPAM_SECONDS = 600  # 10 minutes
+
+# Cache settings
+CACHE_DIR = os.path.join("data", "cache")
+CACHE_MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+CACHE_MAX_AGE = 24 * 3600  # 24 hours
+
 # Global download semaphore (max 5 concurrent)
 _download_semaphore = asyncio.Semaphore(5)
+# Locks per video_id to prevent duplicate downloads
+_download_locks = collections.defaultdict(asyncio.Lock)
 _download_loop = None
 
 # Max video duration in seconds
-MAX_DURATION = 600  # 10 minutes
+MAX_DURATION = 1800  # 30 minutes
 
 # YouTube URL patterns
 YT_URL_RE = re.compile(
@@ -158,9 +171,15 @@ def _send(bot, accid, chat_id, text, file=None):
 def _react(bot, accid, msg_id, emoji: str):
     """Set a reaction on a message."""
     try:
-        bot.rpc.send_reaction(accid, msg_id, [emoji])
+        # emoji_list expects a list of strings
+        bot.rpc.send_reaction(accid, msg_id, [emoji] if emoji else [])
     except Exception as e:
         logger.debug(f"Failed to set reaction on msg {msg_id}: {e}")
+
+
+def _get_cache_path(video_id: str, download_type: str) -> str:
+    ext = "mp4" if download_type == "video" else "mp3"
+    return os.path.join(CACHE_DIR, f"{video_id}.{ext}")
 
 
 # ── yt-dlp wrappers ──
@@ -295,56 +314,92 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     """Actual download + send logic."""
     chat_id = msg.chat_id
     req_msg_id = msg.id
+    
+    # 1. Anti-spam check (per chat)
+    last_sent = database.get_last_download(chat_id, video_id, download_type)
+    if time.time() - last_sent < ANTI_SPAM_SECONDS:
+        _react(bot, accid, req_msg_id, "ℹ️")
+        _send(bot, accid, chat_id, "ℹ️ This video was already sent to this chat recently. Scroll up! 👆")
+        return
 
-    # ⏳ React: downloading
-    _react(bot, accid, req_msg_id, "⏳")
+    # 2. Check cache first
+    cache_path = _get_cache_path(video_id, download_type)
+    if os.path.exists(cache_path):
+        # Update file timestamp to keep it in cache
+        os.utime(cache_path, None)
+        await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path)
+        return
 
-    tmpdir = tempfile.mkdtemp(prefix="ytbot_")
-    try:
-        if download_type == "video":
-            filepath, info, error = await _download_video(video_id, tmpdir)
-        else:
-            filepath, info, error = await _download_audio(video_id, tmpdir)
-
-        if error:
-            _react(bot, accid, req_msg_id, "❌")
-            _send(bot, accid, chat_id, f"❌ {error}")
+    # 3. Wait for lock if already downloading same ID
+    async with _download_locks[video_id + download_type]:
+        # Check cache again after getting lock
+        if os.path.exists(cache_path):
+            await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path)
             return
 
-        if not filepath:
-            _react(bot, accid, req_msg_id, "❌")
-            _send(bot, accid, chat_id, "❌ Download failed: file not found")
-            return
+        # ⏳ React: downloading
+        _react(bot, accid, req_msg_id, "⏳")
 
-        # ⌛ React: sending to chat
-        _react(bot, accid, req_msg_id, "⌛")
-
-        title = (info or {}).get("title", video_id)
-        duration = (info or {}).get("duration", 0)
-        filesize = os.path.getsize(filepath)
-        dur_str = _format_duration(int(duration)) if duration else "?"
-        size_str = _format_size(filesize)
-
-        if download_type == "video":
-            caption = f"📺 {title} ({dur_str}, {size_str})"
-        else:
-            caption = f"🎵 {title} ({dur_str}, {size_str})"
-
-        _send(bot, accid, chat_id, caption, file=filepath)
-
-        # ☑️ React: done
-        _react(bot, accid, req_msg_id, "☑️")
-
-        # Record in DB
-        database.add_download(chat_id, msg.from_id, video_id, title, int(duration or 0), download_type, filesize)
-
-    finally:
-        # Cleanup temp dir
-        import shutil
+        tmpdir = tempfile.mkdtemp(prefix="ytbot_")
         try:
+            if download_type == "video":
+                filepath, info, error = await _download_video(video_id, tmpdir)
+            else:
+                filepath, info, error = await _download_audio(video_id, tmpdir)
+
+            if error:
+                _react(bot, accid, req_msg_id, "❌")
+                _send(bot, accid, chat_id, f"❌ {error}")
+                return
+
+            if not filepath or not os.path.exists(filepath):
+                _react(bot, accid, req_msg_id, "❌")
+                _send(bot, accid, chat_id, "❌ Download failed: file not found")
+                return
+
+            # Move to cache
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            shutil.move(filepath, cache_path)
+            
+            await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
+
+        finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
-        except Exception:
-            pass
+            # Cleanup locks dict to prevent memory leak
+            if video_id + download_type in _download_locks:
+                del _download_locks[video_id + download_type]
+
+
+async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, info=None):
+    """Send a file from the cache to the chat."""
+    chat_id = msg.chat_id
+    req_msg_id = msg.id
+    
+    # ⌛ React: sending
+    _react(bot, accid, req_msg_id, "⌛")
+
+    if not info:
+        # If we don't have info (it was a cache hit), try to get it quickly
+        info = await _fetch_video_info(video_id)
+
+    title = (info or {}).get("title", video_id)
+    duration = (info or {}).get("duration", 0)
+    filesize = os.path.getsize(filepath)
+    dur_str = _format_duration(int(duration)) if duration else "?"
+    size_str = _format_size(filesize)
+
+    if download_type == "video":
+        caption = f"📺 {title} ({dur_str}, {size_str})\n\n🔗 https://youtu.be/{video_id}"
+    else:
+        caption = f"🎵 {title} ({dur_str}, {size_str})\n\n🔗 https://youtu.be/{video_id}"
+
+    _send(bot, accid, chat_id, caption, file=filepath)
+
+    # ☑️ React: done
+    _react(bot, accid, req_msg_id, "☑️")
+
+    # Record in DB
+    database.add_download(chat_id, msg.from_id, video_id, title, int(duration or 0), download_type, filesize)
 
 
 def _handle_download_command(bot, accid, event, download_type: str, payload: str):
@@ -566,6 +621,59 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     _send(bot, accid, msg.chat_id, reply)
 
 
+async def _cache_cleaner_loop():
+    """Background task to keep cache within limits (2GB, 24h)."""
+    while True:
+        try:
+            if not os.path.exists(CACHE_DIR):
+                await asyncio.sleep(3600)
+                continue
+
+            now = time.time()
+            files = []
+            total_size = 0
+
+            for f in os.listdir(CACHE_DIR):
+                path = os.path.join(CACHE_DIR, f)
+                if not os.path.isfile(path):
+                    continue
+                
+                mtime = os.path.getmtime(path)
+                size = os.path.getsize(path)
+                
+                if now - mtime > CACHE_MAX_AGE:
+                    logger.info(f"Removing old cache file: {f}")
+                    os.remove(path)
+                    continue
+                
+                files.append((path, mtime, size))
+                total_size += size
+
+            # If still over size limit, remove oldest files
+            if total_size > CACHE_MAX_SIZE:
+                # Sort by mtime (oldest first)
+                files.sort(key=lambda x: x[1])
+                for path, mtime, size in files:
+                    logger.info(f"Cache limit exceeded, removing oldest: {os.path.basename(path)}")
+                    os.remove(path)
+                    total_size -= size
+                    if total_size <= CACHE_MAX_SIZE:
+                        break
+
+        except Exception as e:
+            logger.error(f"Error in cache cleaner: {e}")
+            
+        await asyncio.sleep(3600)  # Run once an hour
+
+
+def _run_background_loop():
+    """Run the async background loop for cache cleaning."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.create_task(_cache_cleaner_loop())
+    loop.run_forever()
+
+
 # ── Bot lifecycle ──
 
 @dc_cli.on_init
@@ -573,6 +681,13 @@ def on_init(bot, args):
     global dc_bot_instance, dc_accid
     bot.logger.info("Initializing YT Bot...")
     dc_bot_instance = bot
+    
+    # Ensure cache dir exists
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    
+    # Start background loop thread
+    bg_thread = threading.Thread(target=_run_background_loop, daemon=True)
+    bg_thread.start()
 
     for accid in bot.rpc.get_all_account_ids():
         dc_accid = accid

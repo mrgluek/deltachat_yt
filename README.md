@@ -14,10 +14,12 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
   - ☑️ : Sent successfully.
   - ❌ : Error occurred.
 - **Smart Limits:**
-  - Maximum video duration: 10 minutes.
+  - Maximum video duration: 30 minutes.
   - Maximum file size: 50 MB.
   - Rate limiting: 1 request per minute (admin exempt).
   - Global download queue: Max 5 concurrent downloads.
+  - Smart Caching: Files are kept for 24 hours (max 2 GB) to avoid redundant downloads.
+  - Anti-Spam: Prevents sending the same video to the same chat more than once every 10 minutes.
 
 ## Commands
 

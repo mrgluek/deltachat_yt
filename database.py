@@ -85,6 +85,19 @@ def add_download(chat_id: int, from_id: int, video_id: str, title: str, duration
         conn.commit()
         conn.close()
 
+def get_last_download(chat_id: int, video_id: str, download_type: str) -> int:
+    """Get the timestamp of the last time this video was sent to this chat."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT created_at FROM downloads WHERE chat_id = ? AND video_id = ? AND download_type = ? ORDER BY created_at DESC LIMIT 1",
+            (chat_id, video_id, download_type)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else 0
+
 def get_stats() -> dict:
     """Get download statistics."""
     with _lock:
