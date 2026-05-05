@@ -272,7 +272,8 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
 
 async def _download_audio(video_id: str, output_dir: str) -> tuple[str | None, dict | None, str | None]:
     """Download audio. Returns (filepath, info_dict, error_string)."""
-    out_template = os.path.join(output_dir, "%(title).50s.%(ext)s")
+    # Use video_id in filename for reliable file finding after conversion
+    out_template = os.path.join(output_dir, f"{video_id}.%(ext)s")
     cmd = [
         "yt-dlp",
         "--no-playlist",
@@ -280,7 +281,8 @@ async def _download_audio(video_id: str, output_dir: str) -> tuple[str | None, d
         "-x",
         "--audio-format", "mp3",
         "--audio-quality", "128K",
-        "--max-filesize", "50M",
+        # NOTE: no --max-filesize here! It checks SOURCE video size,
+        # not the extracted audio. A 200MB video produces a tiny MP3.
         "--no-warnings",
         "--print-json",
         "-o", out_template,
@@ -300,25 +302,43 @@ async def _download_audio(video_id: str, output_dir: str) -> tuple[str | None, d
             return None, None, f"yt-dlp error: {err[:200]}"
 
         info = json.loads(stdout) if stdout else {}
-        # yt-dlp with -x changes extension; find the actual file
-        filepath = info.get("_filename") or info.get("filename")
-        if filepath:
-            # The file might have been converted to .mp3
-            base = os.path.splitext(filepath)[0]
-            for ext in ['.mp3', '.m4a', '.opus', '.ogg', '.webm']:
-                candidate = base + ext
-                if os.path.exists(candidate):
-                    filepath = candidate
-                    break
-        # Last resort: find any audio file in the output dir
-        if not filepath or not os.path.exists(filepath):
-            filepath = _find_file_in_dir(output_dir, ['.mp3', '.m4a', '.opus', '.ogg', '.webm'])
+
+        # After -x conversion, the original file is deleted and replaced with .mp3
+        # The JSON _filename points to the PRE-conversion file, so we search by video_id
+        filepath = None
+
+        # Try the expected mp3 path first
+        expected_mp3 = os.path.join(output_dir, f"{video_id}.mp3")
+        if os.path.exists(expected_mp3):
+            filepath = expected_mp3
+        else:
+            # Fallback: try JSON filename with different extensions
+            json_path = info.get("_filename") or info.get("filename")
+            if json_path:
+                base = os.path.splitext(json_path)[0]
+                for ext in ['.mp3', '.m4a', '.opus', '.ogg', '.webm']:
+                    candidate = base + ext
+                    if os.path.exists(candidate):
+                        filepath = candidate
+                        break
+            # Last resort: scan directory
+            if not filepath:
+                filepath = _find_file_in_dir(output_dir, ['.mp3', '.m4a', '.opus', '.ogg', '.webm'])
+
         if filepath and os.path.exists(filepath):
+            logger.info(f"Audio file found: {filepath} ({os.path.getsize(filepath)} bytes)")
             size = os.path.getsize(filepath)
             if size > 50 * 1024 * 1024:
                 os.remove(filepath)
                 return None, info, "📦 Audio file exceeds 50 MB"
             return filepath, info, None
+
+        # Debug: log what's actually in the directory
+        try:
+            dir_contents = os.listdir(output_dir) if os.path.isdir(output_dir) else []
+            logger.error(f"Audio file not found for {video_id}. Dir contents: {dir_contents}")
+        except Exception:
+            pass
         return None, info, "Download completed but file not found"
     except asyncio.TimeoutError:
         return None, None, "⏱ Download timed out (5 min limit)"
