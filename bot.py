@@ -109,7 +109,7 @@ SUPPORTED_URL_RE = re.compile(
     r'tiktok\.com/|'
     r'twitch\.tv/|'
     r'bilibili\.com/|'
-    r'rutube\.ru/video/|'
+    r'rutube\.ru/|'
     r'[^/]+/w/'  # PeerTube
     r')[^\s]+'
 )
@@ -637,9 +637,9 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
 
     ext = os.path.splitext(filepath)[1].lower().replace(".", "").upper()
     if download_type == "video":
-        caption = f"📺 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 https://youtu.be/{video_id}"
+        caption = f"📺 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(video_id)}"
     else:
-        caption = f"🎵 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 https://youtu.be/{video_id}"
+        caption = f"🎵 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(video_id)}"
 
     _send(bot, accid, chat_id, caption, file=filepath)
 
