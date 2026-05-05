@@ -128,14 +128,25 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
             return fp.upper().replace(' ', '')
     except Exception:
         pass
+        
+    # Get self fingerprints to exclude them
+    self_fps = set()
+    try:
+        enc_info_self = bot.rpc.get_contact_encryption_info(accid, DC_CONTACT_ID_SELF)
+        if enc_info_self:
+            matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(enc_info_self.split()).replace(':', ''))
+            self_fps.update(m.upper() for m in matches)
+    except: pass
+
     for args in [(accid, contact_id), (contact_id,)]:
         try:
             enc_info = bot.rpc.get_contact_encryption_info(*args)
             if enc_info:
                 cleaned = "".join(enc_info.split()).replace(':', '')
                 matches = re.findall(r'[0-9a-fA-F]{32,64}', cleaned)
-                if matches:
-                    return ",".join(matches).upper()
+                valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
+                if valid_matches:
+                    return ",".join(valid_matches)
         except Exception:
             continue
     return None
