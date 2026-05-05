@@ -535,6 +535,7 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     """Actual download + send logic."""
     chat_id = msg.chat_id
     req_msg_id = msg.id
+    logger.info(f"Starting _do_download for {video_id} (type={download_type}) in chat {chat_id}")
     
     process_key = f"{chat_id}_{video_id}_{download_type}"
     with _processing_lock:
@@ -902,11 +903,13 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        info, _ = loop.run_until_complete(_fetch_video_info(video_id))
+        info, error = loop.run_until_complete(_fetch_video_info(video_id))
     finally:
         loop.close()
 
     if not info:
+        if error and ("This video is not available" in error or "Private video" in error):
+             _send(bot, accid, msg.chat_id, f"❌ {error}")
         return
 
     # 3. Handle thumbnail (persist it)
