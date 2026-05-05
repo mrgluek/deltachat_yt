@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import contextlib
+import urllib.request
 
 from deltachat2 import events, MsgData
 from deltabot_cli import BotCli
@@ -872,7 +873,23 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     else:
         lines.append(f"⚠️ Audio too long (> {MAX_DURATION_AUDIO // 60}m)")
 
-    _send(bot, accid, msg.chat_id, "\n".join(lines))
+    # Fetch thumbnail
+    thumb_path = None
+    thumbnail_url = info.get("thumbnail")
+    if thumbnail_url:
+        try:
+            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+            tmp.close()
+            urllib.request.urlretrieve(thumbnail_url, tmp.name)
+            thumb_path = tmp.name
+        except Exception as e:
+            logger.error(f"Failed to download thumbnail: {e}")
+
+    try:
+        _send(bot, accid, msg.chat_id, "\n".join(lines), file=thumb_path)
+    finally:
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
 
 
 async def _cache_cleaner_loop():
