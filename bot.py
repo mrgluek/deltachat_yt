@@ -597,9 +597,13 @@ def stats_command(bot, accid, event):
         f"Total downloads: {s['total']} ({videos} video, {audios} audio)\n"
         f"Last 24h: {s['last_24h']}\n"
         f"Total data: {_format_size(s['total_size'])}\n"
-        f"\n💾 **Disk Space**\n"
-        f"Free: {free_gb:.1f} GB of {total_gb:.1f} GB ({free_pct:.1f}%)\n"
     )
+
+    if _is_dc_admin(bot, accid, event.msg.from_id):
+        reply += (
+            f"\n💾 **Disk Space (Admin only)**\n"
+            f"Free: {free_gb:.1f} GB of {total_gb:.1f} GB ({free_pct:.1f}%)\n"
+        )
     _send(bot, accid, event.msg.chat_id, reply)
 
 
