@@ -109,6 +109,7 @@ SUPPORTED_URL_RE = re.compile(
     r'tiktok\.com/|'
     r'twitch\.tv/|'
     r'bilibili\.com/|'
+    r'rutube\.ru/video/|'
     r'[^/]+/w/'  # PeerTube
     r')[^\s]+'
 )
