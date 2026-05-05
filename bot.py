@@ -605,6 +605,7 @@ def help_command(bot, accid, event):
 def stats_command(bot, accid, event):
     s = database.get_stats()
     videos = s["by_type"].get("video", 0)
+    audios = s["by_type"].get("audio", 0)
     usage = shutil.disk_usage(CACHE_DIR)
     free_gb = usage.free / (1024**3)
     total_gb = usage.total / (1024**3)
