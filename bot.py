@@ -10,6 +10,7 @@ import threading
 import time
 import contextlib
 import urllib.request
+import hashlib
 
 from deltachat2 import events, MsgData
 from deltabot_cli import BotCli
@@ -97,20 +98,38 @@ YT_URL_RE = re.compile(
 YT_ID_RE = re.compile(r'^[a-zA-Z0-9_-]{11}$')
 
 
+# PeerTube URLs (e.g. https://peertube.tv/w/12345678)
+PEERTUBE_URL_RE = re.compile(r'https?://[^/]+/w/([a-zA-Z0-9_-]+)')
+
 def _make_yt_url(video_id: str) -> str:
+    if video_id.startswith("http://") or video_id.startswith("https://"):
+        return video_id
     return f"https://www.youtube.com/watch?v={video_id}"
 
 
 def _extract_video_id(text: str) -> str | None:
-    """Extract YouTube video ID from URL or raw ID."""
+    """Extract YouTube video ID or recognize PeerTube full URL."""
     text = text.strip()
+    
+    # 1. PeerTube URLs: Return the FULL URL so yt-dlp knows where to download from
+    if PEERTUBE_URL_RE.search(text):
+        return text
+        
+    # 2. YouTube URL -> 11-char ID
     m = YT_URL_RE.search(text)
     if m:
         return m.group(1)
-    # Also support ID prefixed with underscore (from command payload)
+        
+    # 3. Direct YouTube 11-char ID (possibly with leading underscore from payload)
     m_id = re.search(r'^_?([a-zA-Z0-9_-]{11})$', text)
     if m_id:
         return m_id.group(1)
+        
+    # 4. If the user explicitly passed ANY full URL starting with http (for generic yt-dlp support)
+    # But only do this if it's a URL to avoid treating garbage as a video ID
+    if text.startswith("http://") or text.startswith("https://"):
+        return text
+
     return None
 
 
@@ -254,9 +273,14 @@ def _react(bot, accid, msg_id, emoji: str):
         logger.debug(f"Failed to set reaction on msg {msg_id}: {e}")
 
 
+def _get_cache_id(video_id: str) -> str:
+    if video_id.startswith("http://") or video_id.startswith("https://"):
+        return hashlib.md5(video_id.encode()).hexdigest()[:16]
+    return video_id
+
 def _get_cache_path(video_id: str, download_type: str) -> str:
     ext = "mp4" if download_type == "video" else "opus"
-    return os.path.join(CACHE_DIR, f"{video_id}.{ext}")
+    return os.path.join(CACHE_DIR, f"{_get_cache_id(video_id)}.{ext}")
 
 
 # ── yt-dlp wrappers ──
@@ -365,7 +389,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
         # For long podcasts, compress to 64k mono to save bandwidth
         pp_args = ["--postprocessor-args", "ffmpeg:-ac 1 -ar 24000 -b:a 64k"]
 
-    out_template = os.path.join(output_dir, f"{video_id}.%(ext)s")
+    safe_id = _get_cache_id(video_id)
+    out_template = os.path.join(output_dir, f"{safe_id}.%(ext)s")
     cmd = [
         "yt-dlp",
         "--no-playlist",
@@ -396,7 +421,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
             info = json.loads(stdout.decode(errors='replace').strip())
 
         filepath = None
-        expected_path = os.path.join(output_dir, f"{video_id}.opus")
+        expected_path = os.path.join(output_dir, f"{safe_id}.opus")
         if os.path.exists(expected_path):
             filepath = expected_path
         else:
@@ -797,6 +822,14 @@ def on_new_message(bot, accid, event):
         t.start()
         return
 
+    # 2.5. Auto-detect PeerTube links
+    pt_match = PEERTUBE_URL_RE.search(text)
+    if pt_match:
+        video_id = pt_match.group(0) # Full URL
+        t = threading.Thread(target=_handle_link_info, args=(bot, accid, msg, video_id), daemon=True)
+        t.start()
+        return
+
     # 3. Welcome new users in private chats
     try:
         chat_info = bot.rpc.get_basic_chat_info(accid, msg.chat_id)
@@ -861,15 +894,22 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     can_video = duration <= MAX_DURATION_VIDEO
     can_audio = duration <= MAX_DURATION_AUDIO
 
-    lines = [f"📺 YouTube: \"{title}\" ({dur_str})", ""]
+    lines = [f"📺 Video: \"{title}\" ({dur_str})", ""]
+    
+    if video_id.startswith("http://") or video_id.startswith("https://"):
+        vid_cmd = f"/yt {video_id}"
+        aud_cmd = f"/ytm {video_id}"
+    else:
+        vid_cmd = f"/yt_{video_id}"
+        aud_cmd = f"/ytm_{video_id}"
     
     if can_video:
-        lines.append(f"Download video 480p ({video_size_str}): /yt_{video_id}")
+        lines.append(f"Download video 480p ({video_size_str}): {vid_cmd}")
     else:
         lines.append(f"⚠️ Video too long (> {MAX_DURATION_VIDEO // 60}m)")
         
     if can_audio:
-        lines.append(f"Download audio {audio_fmt} ({audio_size_str}): /ytm_{video_id}")
+        lines.append(f"Download audio {audio_fmt} ({audio_size_str}): {aud_cmd}")
     else:
         lines.append(f"⚠️ Audio too long (> {MAX_DURATION_AUDIO // 60}m)")
 
