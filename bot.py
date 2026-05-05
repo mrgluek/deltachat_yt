@@ -619,7 +619,10 @@ def stats_command(bot, accid, event):
         c = bot.rpc.get_contact(accid, event.msg.from_id)
         addr = c.address
     except: pass
-    logger.info(f"Stats requested by {addr} (id={event.msg.from_id}), is_admin={is_admin}")
+    
+    admin_email = database.get_config("admin_dc_email")
+    admin_fp = database.get_admin_fingerprint()
+    logger.info(f"Stats requested by {addr} (id={event.msg.from_id}), is_admin={is_admin} [AdminConfig: email={admin_email}, fp={admin_fp}]")
 
     reply = (
         f"📊 **YT Bot Statistics**\n\n"
