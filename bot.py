@@ -529,7 +529,7 @@ def _handle_download_command(bot, accid, event, download_type: str, payload: str
 @dc_cli.on(events.NewMessage(command="/yt"))
 def yt_command(bot, accid, event):
     """Download YouTube video."""
-    if event.msg.is_outbound or accid != dc_accid:
+    if accid != dc_accid:
         return
     _handle_download_command(bot, accid, event, "video", event.payload.strip())
 
@@ -537,7 +537,7 @@ def yt_command(bot, accid, event):
 @dc_cli.on(events.NewMessage(command="/ytm"))
 def ytm_command(bot, accid, event):
     """Download YouTube audio."""
-    if event.msg.is_outbound or accid != dc_accid:
+    if accid != dc_accid:
         return
     _handle_download_command(bot, accid, event, "audio", event.payload.strip())
 
@@ -634,8 +634,13 @@ def _get_help_text(bot, accid, from_id):
 def on_new_message(bot, accid, event):
     msg = event.msg
     
-    # 0. Safety checks: ignore info msgs, outbound msgs, or wrong account
-    if msg.is_info or msg.is_outbound or accid != dc_accid:
+    # 0. Safety checks: ignore info msgs, wrong account, or outbound msgs
+    if msg.is_info or accid != dc_accid:
+        return
+
+    # To check if outbound, compare from_id with bot's own contact id
+    bot_contact_id = bot.rpc.get_contact_id_by_addr(accid, bot.rpc.get_config(accid, "configured_addr"))
+    if msg.from_id == bot_contact_id:
         return
 
     # Track receiving stats
