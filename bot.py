@@ -98,8 +98,20 @@ YT_URL_RE = re.compile(
 YT_ID_RE = re.compile(r'^[a-zA-Z0-9_-]{11}$')
 
 
-# PeerTube URLs (e.g. https://peertube.tv/w/12345678)
-PEERTUBE_URL_RE = re.compile(r'https?://[^/]+/w/([a-zA-Z0-9_-]+)')
+# Other Supported Video URLs (PeerTube, Vimeo, VK, Twitter, Reddit, Insta, TikTok, etc.)
+SUPPORTED_URL_RE = re.compile(
+    r'https?://(?:www\.)?(?:'
+    r'vimeo\.com/|'
+    r'vk\.com/video|'
+    r'twitter\.com/|x\.com/|'
+    r'reddit\.com/r/|'
+    r'instagram\.com/|'
+    r'tiktok\.com/|'
+    r'twitch\.tv/|'
+    r'bilibili\.com/|'
+    r'[^/]+/w/'  # PeerTube
+    r')[^\s]+'
+)
 
 def _make_yt_url(video_id: str) -> str:
     if video_id.startswith("http://") or video_id.startswith("https://"):
@@ -108,12 +120,13 @@ def _make_yt_url(video_id: str) -> str:
 
 
 def _extract_video_id(text: str) -> str | None:
-    """Extract YouTube video ID or recognize PeerTube full URL."""
+    """Extract YouTube video ID or recognize supported full URLs."""
     text = text.strip()
     
-    # 1. PeerTube URLs: Return the FULL URL so yt-dlp knows where to download from
-    if PEERTUBE_URL_RE.search(text):
-        return text
+    # 1. Supported non-YouTube URLs: Return the FULL URL so yt-dlp knows where to download from
+    m_supported = SUPPORTED_URL_RE.search(text)
+    if m_supported:
+        return m_supported.group(0)
         
     # 2. YouTube URL -> 11-char ID
     m = YT_URL_RE.search(text)
@@ -126,7 +139,6 @@ def _extract_video_id(text: str) -> str | None:
         return m_id.group(1)
         
     # 4. If the user explicitly passed ANY full URL starting with http (for generic yt-dlp support)
-    # But only do this if it's a URL to avoid treating garbage as a video ID
     if text.startswith("http://") or text.startswith("https://"):
         return text
 
@@ -822,10 +834,10 @@ def on_new_message(bot, accid, event):
         t.start()
         return
 
-    # 2.5. Auto-detect PeerTube links
-    pt_match = PEERTUBE_URL_RE.search(text)
-    if pt_match:
-        video_id = pt_match.group(0) # Full URL
+    # 2.5. Auto-detect other supported links (Vimeo, Twitter, Insta, PeerTube, etc.)
+    supported_match = SUPPORTED_URL_RE.search(text)
+    if supported_match:
+        video_id = supported_match.group(0) # Full URL
         t = threading.Thread(target=_handle_link_info, args=(bot, accid, msg, video_id), daemon=True)
         t.start()
         return

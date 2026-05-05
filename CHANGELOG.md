@@ -2,7 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.2.0] - 2026-05-05
+## [1.3.0] - 2026-05-05
+6: 
+7: ### Added
+8: - **Multi-Service Support:** Support for PeerTube, Vimeo, VK, Twitter, Reddit, Instagram, TikTok, and more.
+9: - **Thumbnail Previews:** Info messages now include a video thumbnail preview.
+10: - **Generic URL Handling:** The `/yt` and `/ytm` commands now accept any valid URL.
+11: 
+12: ### Changed
+13: - **Video Optimization:** Configured `yt-dlp` to prefer pre-muxed MP4 formats to avoid unnecessary server-side re-encoding.
+14: - **Audio Optimization:** Disabled re-encoding for short audio tracks to preserve original quality and save CPU.
+15: - **Cache Improvements:** URL-based downloads are now cached using MD5 hashes for safe filesystem storage.
+16: 
+17: ### Fixed
+18: - **Event Shadowing:** Implemented handler-specific debouncing to prevent `on_new_message` from accidentally silencing command handlers.
+19: - **Double-Triggering:** Eliminated redundant "Please wait" messages caused by concurrent event processing.
+20: - **Path Traversal Safety:** Sanitized cache filenames for URL-based downloads.
+21: 
+22: ## [1.2.0] - 2026-05-05
 
 ### Added
 - **Dynamic Opus Strategy:** Switched from MP3 to Opus. High quality (128k stereo) for <= 10m, space-saving (64k mono) for long audio.

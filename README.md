@@ -4,10 +4,11 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 
 ## Features
 
-- **Video Downloads (`/yt`):** Downloads video in MP4 (H.264 + AAC) at 480p. Optimized for inline playback on Android, iOS, and Desktop.
-- **Audio Downloads (`/ytm`):** Extracts audio as high-quality Opus. Uses 128kbps stereo for short clips (<= 10m) and 64kbps mono for long recordings.
-- **Fast Commands:** Use `/yt_VIDEOID` or `/ytm_VIDEOID` for quick downloads.
-- **Auto-Detection:** Automatically detects YouTube links in chat and provides download options with estimated file sizes.
+- **Multi-Service Support:** Downloads from YouTube, **PeerTube, Vimeo, VK, Twitter, Reddit, Instagram, TikTok, Twitch, Bilibili** and more via `yt-dlp`.
+- **Video Downloads (`/yt`):** Downloads video in MP4 (H.264 + AAC) at 480p. Optimized for speed using pre-muxed formats to avoid server-side re-encoding.
+- **Audio Downloads (`/ytm`):** Extracts audio as high-quality Opus. Optimized to skip re-encoding for short clips to preserve original quality.
+- **Auto-Detection:** Automatically detects links in chat and provides download options with **video thumbnails** and estimated file sizes.
+- **Fast Commands:** Use `/yt_VIDEOID` or `/ytm_VIDEOID` (for YouTube) or `/yt URL` (generic) for quick downloads.
 - **Visual Progress:** Uses message reactions to show status:
   - ⏳ : Downloading started.
   - ⌛ : Downloaded, sending to chat.
@@ -20,7 +21,8 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
   - Maximum file size: 50 MB.
   - Rate limiting: 1 request per minute (admin exempt).
   - Global download queue: Max 5 concurrent downloads.
-  - Smart Caching: Files are kept for 24 hours (max 2 GB) to avoid redundant downloads.
+  - Handler-specific debouncing: Prevents race conditions and duplicate sends.
+  - Smart Caching: Files are kept for 24 hours (max 2 GB) using safe MD5 hashes for URLs.
   - Anti-Spam: Prevents sending the same video to the same chat more than once every 10 minutes.
   - Disk Monitoring: Blocks downloads if server disk space is below 10%; warns admin at 20%.
 
