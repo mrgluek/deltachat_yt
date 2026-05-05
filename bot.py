@@ -142,25 +142,45 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
 
 
 def _is_dc_admin(bot, accid, contact_id):
+    """
+    Checks if contact_id is the admin.
+    Priority: Fingerprint (if set) > Email.
+    """
     try:
+        admin_fp = database.get_admin_fingerprint()
+        admin_email = database.get_config("admin_dc_email")
+
+        # If no admin is configured at all, no one is admin
+        if not admin_fp and not admin_email:
+            return False
+
         contact = None
         try:
             contact = bot.rpc.get_contact(accid, contact_id)
         except Exception:
             pass
-        admin_fp = database.get_admin_fingerprint()
+
+        if not contact:
+            return False
+
+        # 1. If fingerprint is set in DB, we prefer checking it
         if admin_fp:
             c_fp = _get_contact_fingerprint(bot, accid, contact_id, contact=contact)
             if c_fp:
                 if admin_fp.upper() in c_fp.upper().split(','):
                     return True
+                # If fingerprints exist but don't match, we don't trust the email!
                 return False
-        if contact:
-            admin_email = database.get_config("admin_dc_email")
-            if admin_email and admin_email.lower() == contact.address.lower():
+            # If we expect a fingerprint but contact doesn't have one yet,
+            # we fall through to email check ONLY if email is also set.
+
+        # 2. Check email
+        if admin_email and contact.address:
+            if admin_email.strip().lower() == contact.address.strip().lower():
                 return True
+
     except Exception as e:
-        logger.error(f"Admin check error: {e}")
+        logger.error(f"Critical error in admin check: {e}")
     return False
 
 
@@ -585,12 +605,20 @@ def help_command(bot, accid, event):
 def stats_command(bot, accid, event):
     s = database.get_stats()
     videos = s["by_type"].get("video", 0)
-    audios = s["by_type"].get("audio", 0)
-    
     usage = shutil.disk_usage(CACHE_DIR)
     free_gb = usage.free / (1024**3)
     total_gb = usage.total / (1024**3)
     free_pct = (usage.free / usage.total) * 100
+
+    is_admin = _is_dc_admin(bot, accid, event.msg.from_id)
+    
+    # Log for debugging
+    addr = "unknown"
+    try:
+        c = bot.rpc.get_contact(accid, event.msg.from_id)
+        addr = c.address
+    except: pass
+    logger.info(f"Stats requested by {addr} (id={event.msg.from_id}), is_admin={is_admin}")
 
     reply = (
         f"📊 **YT Bot Statistics**\n\n"
@@ -599,7 +627,7 @@ def stats_command(bot, accid, event):
         f"Total data: {_format_size(s['total_size'])}\n"
     )
 
-    if _is_dc_admin(bot, accid, event.msg.from_id):
+    if is_admin:
         reply += (
             f"\n💾 **Disk Space (Admin only)**\n"
             f"Free: {free_gb:.1f} GB of {total_gb:.1f} GB ({free_pct:.1f}%)\n"
