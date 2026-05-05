@@ -182,13 +182,8 @@ def _react(bot, accid, msg_id, emoji: str):
 
 
 def _get_cache_path(video_id: str, download_type: str) -> str:
-    if download_type == "video":
-        return os.path.join(CACHE_DIR, f"{video_id}.mp4")
-    # For audio, check both possible extensions
-    mp3_path = os.path.join(CACHE_DIR, f"{video_id}.mp3")
-    if os.path.exists(mp3_path):
-        return mp3_path
-    return os.path.join(CACHE_DIR, f"{video_id}.opus")
+    ext = "mp4" if download_type == "video" else "opus"
+    return os.path.join(CACHE_DIR, f"{video_id}.{ext}")
 
 
 # ── yt-dlp wrappers ──
@@ -285,12 +280,10 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
 
 async def _download_audio(video_id: str, output_dir: str, duration: int) -> tuple[str | None, dict | None, str | None]:
     """Download audio. Returns (filepath, info_dict, error_string)."""
-    # Hybrid strategy: MP3 128k for short, Opus 64k for long
-    if duration <= 1800:
-        fmt = "mp3"
-        pp_args = ["--postprocessor-args", "ExtractAudio:-b:a 128k"]
-    else:
-        fmt = "opus"
+    fmt = "opus"
+    if duration <= 600:  # <= 10 minutes: high quality stereo
+        pp_args = ["--postprocessor-args", "ffmpeg:-ac 2 -ar 48000 -b:a 128k"]
+    else:               # > 10 minutes: space-saving mono
         pp_args = ["--postprocessor-args", "ffmpeg:-ac 1 -ar 24000 -b:a 64k"]
 
     out_template = os.path.join(output_dir, f"{video_id}.%(ext)s")
@@ -341,7 +334,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
 
         # After -x conversion, search by video_id and format
         filepath = None
-        expected_path = os.path.join(output_dir, f"{video_id}.{fmt}")
+        expected_path = os.path.join(output_dir, f"{video_id}.opus")
         if os.path.exists(expected_path):
             filepath = expected_path
         else:
@@ -349,14 +342,14 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
             json_path = info.get("_filename") or info.get("filename")
             if json_path:
                 base = os.path.splitext(json_path)[0]
-                for ext in ['.mp3', '.opus', '.m4a', '.webm']:
+                for ext in ['.opus', '.mp3', '.m4a', '.webm']:
                     candidate = base + ext
                     if os.path.exists(candidate):
                         filepath = candidate
                         break
             # Last resort: scan directory
             if not filepath:
-                filepath = _find_file_in_dir(output_dir, ['.mp3', '.opus', '.m4a', '.webm'])
+                filepath = _find_file_in_dir(output_dir, ['.opus', '.mp3', '.m4a', '.webm'])
 
         if filepath and os.path.exists(filepath):
             logger.info(f"Audio file found: {filepath} ({os.path.getsize(filepath)} bytes)")
@@ -723,14 +716,14 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     duration = info.get("duration", 0)
     dur_str = _format_duration(int(duration)) if duration else "?"
 
-    audio_fmt = "MP3" if duration <= 1800 else "Opus"
+    audio_fmt = "Opus"
     
     # Size estimation
     video_size_str = "?? MB"
     audio_size_str = "?? MB"
     if duration:
-        # Audio estimation is very accurate because we force the bitrate
-        bitrate = 128 if duration <= 1800 else 64
+        # Audio estimation: Opus 128k for short, 64k for long
+        bitrate = 128 if duration <= 600 else 64
         audio_mb = (duration * bitrate) / 8192
         audio_size_str = f"~{audio_mb:.1f} MB"
         
