@@ -878,6 +878,7 @@ def on_new_message(bot, accid, event):
     yt_match = YT_URL_RE.search(text)
     if yt_match:
         video_id = yt_match.group(1)
+        _react(bot, accid, msg.id, "🤖")
         t = threading.Thread(target=_handle_link_info, args=(bot, accid, msg, video_id), daemon=True)
         t.start()
         return
@@ -886,6 +887,7 @@ def on_new_message(bot, accid, event):
     supported_match = SUPPORTED_URL_RE.search(text)
     if supported_match:
         video_id = supported_match.group(0) # Full URL
+        _react(bot, accid, msg.id, "🤖")
         t = threading.Thread(target=_handle_link_info, args=(bot, accid, msg, video_id), daemon=True)
         t.start()
         return
