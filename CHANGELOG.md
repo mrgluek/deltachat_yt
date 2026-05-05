@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-05-05
+
+### Added
+- **Dynamic Opus Strategy:** Switched from MP3 to Opus. High quality (128k stereo) for <= 10m, space-saving (64k mono) for long audio.
+- **Disk Monitoring:** Automatic download blocking at 10% free space and admin warnings at 20%.
+- **Improved UX:** Added estimated file sizes with `~` prefix in link detection messages.
+- **Enhanced Anti-Spam:** Debounced warning messages and fixed duplicate sends caused by client-side double-taps.
+
+### Changed
+- Increased maximum audio duration limit to 60 minutes.
+- Updated `/stats` command to display real-time disk usage info.
+
+### Fixed
+- Memory leak in download lock management.
+- Zombie `yt-dlp` processes when download timeouts occur.
+- Bug where administrative messages were sometimes processed by multiple threads.
+
 ## [1.1.0] - 2026-05-05
 
 ### Added
