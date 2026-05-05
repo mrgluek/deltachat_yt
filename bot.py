@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import threading
 import time
+import contextlib
 
 from deltachat2 import events, MsgData
 from deltabot_cli import BotCli
@@ -39,11 +40,33 @@ CACHE_DIR = os.path.join("data", "cache")
 CACHE_MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
 CACHE_MAX_AGE = 24 * 3600  # 24 hours
 
-# Global download semaphore (max 5 concurrent)
+# Semaphore for yt-dlp concurrency
 _download_semaphore = asyncio.Semaphore(5)
-# Locks per video_id to prevent duplicate downloads
-_download_locks = collections.defaultdict(asyncio.Lock)
-_download_loop = None
+
+# Thread-safe refcounted locks for per-video synchronization
+class RefCountLock:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.refs = 0
+
+_global_lock_mgr = threading.Lock()
+_download_locks: dict[str, RefCountLock] = {}
+
+@contextlib.contextmanager
+def get_download_lock(key: str):
+    with _global_lock_mgr:
+        if key not in _download_locks:
+            _download_locks[key] = RefCountLock()
+        ref_lock = _download_locks[key]
+        ref_lock.refs += 1
+        
+    with ref_lock.lock:
+        yield
+        
+    with _global_lock_mgr:
+        ref_lock.refs -= 1
+        if ref_lock.refs == 0:
+            del _download_locks[key]
 
 # Max duration in seconds
 MAX_DURATION_VIDEO = 1800  # 30 minutes
@@ -253,7 +276,6 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
 
         info = json.loads(stdout) if stdout else {}
         filepath = info.get("_filename") or info.get("filename")
-        # yt-dlp may report a pre-merge filename; try alternatives
         if not filepath or not os.path.exists(filepath):
             if filepath:
                 base = os.path.splitext(filepath)[0]
@@ -262,7 +284,6 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
                     if os.path.exists(candidate):
                         filepath = candidate
                         break
-            # Last resort: find any video file in the output dir
             if not filepath or not os.path.exists(filepath):
                 filepath = _find_file_in_dir(output_dir, ['.mp4', '.mkv', '.webm'])
         if filepath and os.path.exists(filepath):
@@ -273,6 +294,11 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
             return filepath, info, None
         return None, info, "Download completed but file not found"
     except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except:
+            pass
         return None, None, "⏱ Download timed out (5 min limit)"
     except Exception as e:
         return None, None, f"Error: {e}"
@@ -281,9 +307,9 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
 async def _download_audio(video_id: str, output_dir: str, duration: int) -> tuple[str | None, dict | None, str | None]:
     """Download audio. Returns (filepath, info_dict, error_string)."""
     fmt = "opus"
-    if duration <= 600:  # <= 10 minutes: high quality stereo
+    if duration <= 600:
         pp_args = ["--postprocessor-args", "ffmpeg:-ac 2 -ar 48000 -b:a 128k"]
-    else:               # > 10 minutes: space-saving mono
+    else:
         pp_args = ["--postprocessor-args", "ffmpeg:-ac 1 -ar 24000 -b:a 64k"]
 
     out_template = os.path.join(output_dir, f"{video_id}.%(ext)s")
@@ -308,37 +334,19 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
 
         if proc.returncode != 0:
             err = stderr.decode(errors='replace').strip()
-            logger.error(f"yt-dlp audio failed (rc={proc.returncode}) for {video_id}: {err[:500]}")
             if "duration" in err.lower() or "filter" in err.lower():
                 return None, None, f"⏱ Audio is longer than {MAX_DURATION_AUDIO // 60} minutes"
             return None, None, f"yt-dlp error: {err[:200]}"
 
-        # Log raw output for debugging
-        stderr_text = stderr.decode(errors='replace').strip() if stderr else ""
-        if stderr_text:
-            logger.info(f"yt-dlp audio stderr for {video_id}: {stderr_text[:500]}")
-
         info = {}
         if stdout:
-            stdout_text = stdout.decode(errors='replace').strip()
-            logger.info(f"yt-dlp audio stdout length: {len(stdout_text)}, _filename in output: {'_filename' in stdout_text}")
-            try:
-                info = json.loads(stdout_text)
-                json_fn = info.get("_filename") or info.get("filename")
-                logger.info(f"yt-dlp reported _filename: {json_fn}")
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse yt-dlp JSON: {e}. First 200 chars: {stdout_text[:200]}")
-        else:
-            logger.warning(f"yt-dlp audio returned no stdout for {video_id} (likely filtered out by duration)")
-            return None, None, f"⏱ Audio is longer than {MAX_DURATION_AUDIO // 60} minutes"
+            info = json.loads(stdout.decode(errors='replace').strip())
 
-        # After -x conversion, search by video_id and format
         filepath = None
         expected_path = os.path.join(output_dir, f"{video_id}.opus")
         if os.path.exists(expected_path):
             filepath = expected_path
         else:
-            # Fallback: try JSON filename with different extensions
             json_path = info.get("_filename") or info.get("filename")
             if json_path:
                 base = os.path.splitext(json_path)[0]
@@ -347,28 +355,27 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
                     if os.path.exists(candidate):
                         filepath = candidate
                         break
-            # Last resort: scan directory
             if not filepath:
                 filepath = _find_file_in_dir(output_dir, ['.opus', '.mp3', '.m4a', '.webm'])
 
         if filepath and os.path.exists(filepath):
-            logger.info(f"Audio file found: {filepath} ({os.path.getsize(filepath)} bytes)")
             size = os.path.getsize(filepath)
             if size > 50 * 1024 * 1024:
                 os.remove(filepath)
                 return None, info, "📦 Audio file exceeds 50 MB"
             return filepath, info, None
-
-        # Debug: log what's actually in the directory
-        try:
-            dir_contents = os.listdir(output_dir) if os.path.isdir(output_dir) else []
-            logger.error(f"Audio file not found for {video_id}. Dir contents: {dir_contents}")
-        except Exception:
-            pass
+        
+        logger.error(f"Audio file not found for {video_id}. Dir contents: {os.listdir(output_dir)}")
         return None, info, "Download completed but file not found"
     except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except:
+            pass
         return None, None, "⏱ Download timed out (5 min limit)"
     except Exception as e:
+        logger.error(f"Error in _download_audio for {video_id}: {e}")
         return None, None, f"Error: {e}"
 
 
@@ -384,6 +391,32 @@ def _run_download(bot, accid, msg, video_id: str, download_type: str):
 
 _anti_spam_warnings: dict[str, float] = {}
 
+def _check_disk_space(bot, accid, msg) -> bool:
+    """Returns True if there is enough space, False if blocked. Warns admin if low."""
+    usage = shutil.disk_usage(CACHE_DIR)
+    free_ratio = usage.free / usage.total
+    
+    if free_ratio < 0.10:
+        _react(bot, accid, msg.id, "❌")
+        _send(bot, accid, msg.chat_id, "❌ Download unavailable: server is out of disk space.")
+        return False
+        
+    if free_ratio < 0.20:
+        last_warn = getattr(_check_disk_space, "last_warn", 0)
+        if time.time() - last_warn > 3600:
+            _check_disk_space.last_warn = time.time()
+            admin_email = database.get_config("admin_dc_email")
+            if admin_email:
+                try:
+                    admin_chat = bot.rpc.create_chat_by_contact_id(
+                        accid, bot.rpc.create_contact(accid, admin_email, "")
+                    )
+                    _send(bot, accid, admin_chat, f"⚠️ SYSTEM WARNING: Disk space is below 20%! Only {usage.free // (1024**3)} GB left.")
+                except Exception as e:
+                    bot.logger.error(f"Failed to warn admin about disk space: {e}")
+    return True
+
+
 async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     """Actual download + send logic."""
     chat_id = msg.chat_id
@@ -394,18 +427,20 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     if time.time() - last_sent < ANTI_SPAM_SECONDS:
         _react(bot, accid, req_msg_id, "ℹ️")
         
-        # Debounce the warning message itself (don't spam the anti-spam)
         warning_key = f"{chat_id}_{video_id}_{download_type}"
         last_warning = _anti_spam_warnings.get(warning_key, 0)
-        if time.time() - last_warning > 10:  # Only warn once every 10 seconds
+        if time.time() - last_warning > 10:
             _anti_spam_warnings[warning_key] = time.time()
             _send(bot, accid, chat_id, "ℹ️ This video was already sent to this chat recently. Scroll up! 👆")
+        return
+
+    # 1.5 Disk space check
+    if not _check_disk_space(bot, accid, msg):
         return
 
     # 2. Check cache first
     cache_path = _get_cache_path(video_id, download_type)
     if os.path.exists(cache_path):
-        # Update file timestamp to keep it in cache
         os.utime(cache_path, None)
         await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path)
         return
@@ -420,8 +455,7 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     duration = int(info.get("duration", 0))
 
     # 4. Wait for lock if already downloading same ID
-    async with _download_locks[video_id + download_type]:
-        # Check cache again after getting lock
+    with get_download_lock(video_id + download_type):
         cache_path = _get_cache_path(video_id, download_type)
         if os.path.exists(cache_path):
             await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
@@ -431,7 +465,7 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
         _react(bot, accid, req_msg_id, "⏳")
 
         last_error = None
-        for attempt in range(2):  # Try up to 2 times
+        for attempt in range(2):
             tmpdir = tempfile.mkdtemp(prefix="ytbot_")
             try:
                 if download_type == "video":
@@ -441,9 +475,7 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
 
                 if error:
                     last_error = error
-                    # Retry only for "file not found" errors
                     if "file not found" in error.lower() and attempt == 0:
-                        logger.warning(f"Attempt {attempt+1} failed for {video_id}: {error}, retrying...")
                         continue
                     _react(bot, accid, req_msg_id, "❌")
                     _send(bot, accid, chat_id, f"❌ {error}")
@@ -452,29 +484,22 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
                 if not filepath or not os.path.exists(filepath):
                     last_error = "Download failed: file not found"
                     if attempt == 0:
-                        logger.warning(f"Attempt {attempt+1}: file not found for {video_id}, retrying...")
                         continue
                     _react(bot, accid, req_msg_id, "❌")
                     _send(bot, accid, chat_id, f"❌ {last_error}")
                     return
 
-                # Move to cache
                 os.makedirs(CACHE_DIR, exist_ok=True)
                 shutil.move(filepath, cache_path)
                 
                 await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
-                return  # Success!
+                return
 
             finally:
                 shutil.rmtree(tmpdir, ignore_errors=True)
 
-        # All attempts failed
         _react(bot, accid, req_msg_id, "❌")
         _send(bot, accid, chat_id, f"❌ {last_error or 'Download failed after retry'}")
-
-        # Cleanup lock
-        if video_id + download_type in _download_locks:
-            del _download_locks[video_id + download_type]
 
 
 async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, info=None):
@@ -482,11 +507,9 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
     chat_id = msg.chat_id
     req_msg_id = msg.id
     
-    # ⌛ React: sending
     _react(bot, accid, req_msg_id, "⌛")
 
     if not info:
-        # If we don't have info (it was a cache hit), try to get it quickly
         info = await _fetch_video_info(video_id)
 
     title = (info or {}).get("title", video_id)
@@ -503,10 +526,8 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
 
     _send(bot, accid, chat_id, caption, file=filepath)
 
-    # ☑️ React: done
     _react(bot, accid, req_msg_id, "☑️")
 
-    # Record in DB
     database.add_download(chat_id, msg.from_id, video_id, title, int(duration or 0), download_type, filesize)
 
 
@@ -523,7 +544,6 @@ def _handle_download_command(bot, accid, event, download_type: str, payload: str
         _send(bot, accid, msg.chat_id, f"⏱ Please wait {RATE_LIMIT_SECONDS}s between downloads.")
         return
 
-    # Start download in background thread
     t = threading.Thread(target=_run_download, args=(bot, accid, msg, video_id, download_type), daemon=True)
     t.start()
 
@@ -532,7 +552,6 @@ def _handle_download_command(bot, accid, event, download_type: str, payload: str
 
 @dc_cli.on(events.NewMessage(command="/yt"))
 def yt_command(bot, accid, event):
-    """Download YouTube video."""
     if accid != dc_accid:
         return
     _handle_download_command(bot, accid, event, "video", event.payload.strip())
@@ -540,7 +559,6 @@ def yt_command(bot, accid, event):
 
 @dc_cli.on(events.NewMessage(command="/ytm"))
 def ytm_command(bot, accid, event):
-    """Download YouTube audio."""
     if accid != dc_accid:
         return
     _handle_download_command(bot, accid, event, "audio", event.payload.strip())
@@ -555,17 +573,24 @@ def help_command(bot, accid, event):
 
 @dc_cli.on(events.NewMessage(command="/stats"))
 def stats_command(bot, accid, event):
-    msg = event.msg
     s = database.get_stats()
     videos = s["by_type"].get("video", 0)
     audios = s["by_type"].get("audio", 0)
+    
+    usage = shutil.disk_usage(CACHE_DIR)
+    free_gb = usage.free / (1024**3)
+    total_gb = usage.total / (1024**3)
+    free_pct = (usage.free / usage.total) * 100
+
     reply = (
         f"📊 **YT Bot Statistics**\n\n"
         f"Total downloads: {s['total']} ({videos} video, {audios} audio)\n"
         f"Last 24h: {s['last_24h']}\n"
-        f"Total data: {_format_size(s['total_size'])}"
+        f"Total data: {_format_size(s['total_size'])}\n"
+        f"\n💾 **Disk Space**\n"
+        f"Free: {free_gb:.1f} GB of {total_gb:.1f} GB ({free_pct:.1f}%)\n"
     )
-    _send(bot, accid, msg.chat_id, reply)
+    _send(bot, accid, event.msg.chat_id, reply)
 
 
 @dc_cli.on(events.NewMessage(command="/donate"))
