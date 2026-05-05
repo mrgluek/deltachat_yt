@@ -448,99 +448,115 @@ def _check_disk_space(bot, accid, msg) -> bool:
     return True
 
 
+_processing = set()
+_processing_lock = threading.Lock()
+
 async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     """Actual download + send logic."""
     chat_id = msg.chat_id
     req_msg_id = msg.id
     
-    # 1. Anti-spam check (per chat)
-    last_sent = database.get_last_download(chat_id, video_id, download_type)
-    if time.time() - last_sent < ANTI_SPAM_SECONDS:
-        _react(bot, accid, req_msg_id, "ℹ️")
+    process_key = f"{chat_id}_{video_id}_{download_type}"
+    with _processing_lock:
+        if process_key in _processing:
+            # Silently debounce duplicate concurrent requests
+            return
+        _processing.add(process_key)
         
-        warning_key = f"{chat_id}_{video_id}_{download_type}"
-        last_warning = _anti_spam_warnings.get(warning_key, 0)
-        if time.time() - last_warning > 10:
-            _anti_spam_warnings[warning_key] = time.time()
-            _send(bot, accid, chat_id, "ℹ️ This video was already sent to this chat recently. Scroll up! 👆")
-        return
-
-    # 1.5 Disk space check
-    if not _check_disk_space(bot, accid, msg):
-        return
-
-    # 2. Check cache first
-    cache_path = _get_cache_path(video_id, download_type)
-    if os.path.exists(cache_path):
-        os.utime(cache_path, None)
-        await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path)
-        return
-
-    # 3. Fetch info to know duration for audio strategy
-    info = await _fetch_video_info(video_id)
-    if not info:
-        _react(bot, accid, req_msg_id, "❌")
-        _send(bot, accid, chat_id, "❌ Could not fetch video info")
-        return
-    
-    duration = int(info.get("duration", 0))
-
-    # 4. Wait for lock if already downloading same ID
-    with get_download_lock(video_id + download_type):
-        cache_path = _get_cache_path(video_id, download_type)
-        if os.path.exists(cache_path):
-            # Re-check anti-spam inside the lock for the current chat
-            # This prevents duplicate sends if the user double-tapped the download link
-            last_sent_after_lock = database.get_last_download(chat_id, video_id, download_type)
-            if time.time() - last_sent_after_lock < ANTI_SPAM_SECONDS:
-                warning_key = f"{chat_id}_{video_id}_{download_type}"
-                if time.time() - _anti_spam_warnings.get(warning_key, 0) > 10:
-                    _anti_spam_warnings[warning_key] = time.time()
-                    _send(bot, accid, chat_id, "ℹ️ This video was already sent to this chat recently. Scroll up! 👆")
-                return
-
-            await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
+    try:
+        # 1. Anti-spam check (per chat)
+        last_sent = database.get_last_download(chat_id, video_id, download_type)
+        if time.time() - last_sent < ANTI_SPAM_SECONDS:
+            _react(bot, accid, req_msg_id, "ℹ️")
+            
+            warning_key = f"{chat_id}_{video_id}_{download_type}"
+            last_warning = _anti_spam_warnings.get(warning_key, 0)
+            if time.time() - last_warning > 10:
+                _anti_spam_warnings[warning_key] = time.time()
+                _send(bot, accid, chat_id, "ℹ️ This video was already sent to this chat recently. Scroll up! 👆")
             return
 
-        # ⏳ React: downloading
-        _react(bot, accid, req_msg_id, "⏳")
 
-        last_error = None
-        for attempt in range(2):
-            tmpdir = tempfile.mkdtemp(prefix="ytbot_")
-            try:
-                if download_type == "video":
-                    filepath, info, error = await _download_video(video_id, tmpdir)
-                else:
-                    filepath, info, error = await _download_audio(video_id, tmpdir, duration)
-
-                if error:
-                    last_error = error
-                    if "file not found" in error.lower() and attempt == 0:
-                        continue
-                    _react(bot, accid, req_msg_id, "❌")
-                    _send(bot, accid, chat_id, f"❌ {error}")
+        # 1.5 Disk space check
+        if not _check_disk_space(bot, accid, msg):
+            return
+    
+        # 2. Check cache first
+        cache_path = _get_cache_path(video_id, download_type)
+        if os.path.exists(cache_path):
+            os.utime(cache_path, None)
+            await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path)
+            return
+    
+        # 3. Fetch info to know duration for audio strategy
+        info = await _fetch_video_info(video_id)
+        if not info:
+            _react(bot, accid, req_msg_id, "❌")
+            _send(bot, accid, chat_id, "❌ Could not fetch video info")
+            return
+        
+        duration = int(info.get("duration", 0))
+    
+        # 4. Wait for lock if already downloading same ID
+        with get_download_lock(video_id + download_type):
+            cache_path = _get_cache_path(video_id, download_type)
+            if os.path.exists(cache_path):
+                # Re-check anti-spam inside the lock for the current chat
+                # This prevents duplicate sends if the user double-tapped the download link
+                last_sent_after_lock = database.get_last_download(chat_id, video_id, download_type)
+                if time.time() - last_sent_after_lock < ANTI_SPAM_SECONDS:
+                    warning_key = f"{chat_id}_{video_id}_{download_type}"
+                    if time.time() - _anti_spam_warnings.get(warning_key, 0) > 10:
+                        _anti_spam_warnings[warning_key] = time.time()
+                        _send(bot, accid, chat_id, "ℹ️ This video was already sent to this chat recently. Scroll up! 👆")
                     return
-
-                if not filepath or not os.path.exists(filepath):
-                    last_error = "Download failed: file not found"
-                    if attempt == 0:
-                        continue
-                    _react(bot, accid, req_msg_id, "❌")
-                    _send(bot, accid, chat_id, f"❌ {last_error}")
-                    return
-
-                os.makedirs(CACHE_DIR, exist_ok=True)
-                shutil.move(filepath, cache_path)
-                
+    
                 await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
                 return
-
-            finally:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-
-        _react(bot, accid, req_msg_id, "❌")
-        _send(bot, accid, chat_id, f"❌ {last_error or 'Download failed after retry'}")
+    
+            # ⏳ React: downloading
+            _react(bot, accid, req_msg_id, "⏳")
+    
+            last_error = None
+            for attempt in range(2):
+                tmpdir = tempfile.mkdtemp(prefix="ytbot_")
+                try:
+                    if download_type == "video":
+                        filepath, info, error = await _download_video(video_id, tmpdir)
+                    else:
+                        filepath, info, error = await _download_audio(video_id, tmpdir, duration)
+    
+                    if error:
+                        last_error = error
+                        if "file not found" in error.lower() and attempt == 0:
+                            continue
+                        _react(bot, accid, req_msg_id, "❌")
+                        _send(bot, accid, chat_id, f"❌ {error}")
+                        return
+    
+                    if not filepath or not os.path.exists(filepath):
+                        last_error = "Download failed: file not found"
+                        if attempt == 0:
+                            continue
+                        _react(bot, accid, req_msg_id, "❌")
+                        _send(bot, accid, chat_id, f"❌ {last_error}")
+                        return
+    
+                    os.makedirs(CACHE_DIR, exist_ok=True)
+                    shutil.move(filepath, cache_path)
+                    
+                    await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
+                    return
+    
+                finally:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+    
+            _react(bot, accid, req_msg_id, "❌")
+            _send(bot, accid, chat_id, f"❌ {last_error or 'Download failed after retry'}")
+            
+    finally:
+        with _processing_lock:
+            _processing.discard(process_key)
 
 
 async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, info=None):
