@@ -1062,7 +1062,7 @@ def on_init(bot, args):
         bot.rpc.set_config(accid, "displayname", "YT Bot")
         bot.rpc.set_config(accid, "selfstatus",
                            "I download YouTube videos and audio. Send /help for commands.")
-        bot.rpc.set_config(accid, "delete_device_after", "604800")
+        bot.rpc.set_config(accid, "delete_device_after", "3600")
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             for icon_name in ["icon.png", os.path.join("data", "icon.png")]:
