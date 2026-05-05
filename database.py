@@ -56,6 +56,15 @@ def init_db():
                 created_at INTEGER DEFAULT (strftime('%s','now'))
             )
         ''')
+        # Metadata cache for faster link info responses
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS info_cache (
+                video_id TEXT PRIMARY KEY,
+                info_json TEXT,
+                thumb_path TEXT,
+                created_at INTEGER DEFAULT (strftime('%s','now'))
+            )
+        ''')
         
         conn.commit()
         conn.close()
@@ -209,5 +218,33 @@ def resolve_url(short_id: str) -> str:
         row = cursor.fetchone()
         conn.close()
         return row[0] if row else None
+
+def get_cached_info(video_id: str) -> tuple[str, str] | None:
+    """Get cached metadata JSON and thumbnail path."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        # Only return if not older than 24 hours
+        cursor.execute(
+            "SELECT info_json, thumb_path FROM info_cache WHERE video_id = ? AND created_at >= CAST(strftime('%s','now') AS INTEGER) - 86400",
+            (video_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return (row[0], row[1]) if row else None
+
+def set_cached_info(video_id: str, info_json: str, thumb_path: str):
+    """Store video metadata and thumbnail path in cache."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO info_cache (video_id, info_json, thumb_path) VALUES (?, ?, ?)",
+            (video_id, info_json, thumb_path)
+        )
+        # Cleanup old cache entries (older than 24h)
+        cursor.execute("DELETE FROM info_cache WHERE created_at < CAST(strftime('%s','now') AS INTEGER) - 86400")
+        conn.commit()
+        conn.close()
 
 init_db()

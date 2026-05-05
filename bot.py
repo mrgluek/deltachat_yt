@@ -42,6 +42,9 @@ CACHE_DIR = os.path.join("data", "cache")
 CACHE_MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
 CACHE_MAX_AGE = 24 * 3600  # 24 hours
 
+THUMB_CACHE_DIR = os.path.join("data", "thumbnails")
+os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
+
 # Semaphore for yt-dlp concurrency
 _download_semaphore = asyncio.Semaphore(5)
 
@@ -872,7 +875,21 @@ def on_new_message(bot, accid, event):
 
 
 def _handle_link_info(bot, accid, msg, video_id: str):
-    """Fetch video info and reply with download commands."""
+    """Fetch video info and reply with download commands (with caching)."""
+    # 1. Check Cache
+    cached = database.get_cached_info(video_id)
+    if cached:
+        info_json, cached_thumb = cached
+        try:
+            info = json.loads(info_json)
+            # Check if thumb still exists
+            thumb_path = cached_thumb if cached_thumb and os.path.exists(cached_thumb) else None
+            _display_link_info(bot, accid, msg, video_id, info, thumb_path)
+            return
+        except Exception as e:
+            logger.error(f"Failed to load cached info for {video_id}: {e}")
+
+    # 2. Fetch fresh info
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -881,8 +898,32 @@ def _handle_link_info(bot, accid, msg, video_id: str):
         loop.close()
 
     if not info:
-        return  # Silently ignore if we can't fetch info
+        return
 
+    # 3. Handle thumbnail (persist it)
+    thumb_path = None
+    thumbnail_url = info.get("thumbnail")
+    if thumbnail_url:
+        try:
+            safe_id = _get_cache_id(video_id)
+            persist_thumb = os.path.join(THUMB_CACHE_DIR, f"{safe_id}.jpg")
+            urllib.request.urlretrieve(thumbnail_url, persist_thumb)
+            thumb_path = persist_thumb
+        except Exception as e:
+            logger.error(f"Failed to download thumbnail: {e}")
+
+    # 4. Save to Cache
+    try:
+        database.set_cached_info(video_id, json.dumps(info), thumb_path or "")
+    except Exception as e:
+        logger.error(f"Failed to cache info for {video_id}: {e}")
+
+    # 5. Display
+    _display_link_info(bot, accid, msg, video_id, info, thumb_path)
+
+
+def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: str | None):
+    """Helper to format and send the link info message."""
     title = info.get("title", "Unknown")
     duration = info.get("duration", 0)
     dur_str = _format_duration(int(duration)) if duration else "?"
@@ -900,7 +941,6 @@ def _handle_link_info(bot, accid, msg, video_id: str):
         
         # Video 480p estimation
         video_mb = 0
-        # Try to find a real 480p format size in the metadata
         for f in info.get('formats', []):
             if f.get('height') == 480 and f.get('vcodec') != 'none':
                 fs = f.get('filesize') or f.get('filesize_approx')
@@ -908,7 +948,6 @@ def _handle_link_info(bot, accid, msg, video_id: str):
                     video_mb = fs / 1048576
                     break
         
-        # Fallback if no format size found: use ~500kbps (0.06 MB/s)
         if not video_mb:
             video_mb = duration * 0.06
             
@@ -920,8 +959,7 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     lines = [f"📺 Video: \"{title}\" ({dur_str})", ""]
     
     if video_id.startswith("http://") or video_id.startswith("https://"):
-        # Generate a short clickable command for full URLs
-        short_id = hashlib.md5(video_id.encode()).hexdigest()[:16]
+        short_id = _get_cache_id(video_id)
         database.add_url_mapping(short_id, video_id)
         vid_cmd = f"/yt_{short_id}"
         aud_cmd = f"/ytm_{short_id}"
@@ -939,23 +977,7 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     else:
         lines.append(f"⚠️ Audio too long (> {MAX_DURATION_AUDIO // 60}m)")
 
-    # Fetch thumbnail
-    thumb_path = None
-    thumbnail_url = info.get("thumbnail")
-    if thumbnail_url:
-        try:
-            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-            tmp.close()
-            urllib.request.urlretrieve(thumbnail_url, tmp.name)
-            thumb_path = tmp.name
-        except Exception as e:
-            logger.error(f"Failed to download thumbnail: {e}")
-
-    try:
-        _send(bot, accid, msg.chat_id, "\n".join(lines), file=thumb_path)
-    finally:
-        if thumb_path and os.path.exists(thumb_path):
-            os.remove(thumb_path)
+    _send(bot, accid, msg.chat_id, "\n".join(lines), file=thumb_path)
 
 
 async def _cache_cleaner_loop():
@@ -996,6 +1018,13 @@ async def _cache_cleaner_loop():
                     total_size -= size
                     if total_size <= CACHE_MAX_SIZE:
                         break
+
+            # Also clean thumbnails older than CACHE_MAX_AGE
+            if os.path.exists(THUMB_CACHE_DIR):
+                for f in os.listdir(THUMB_CACHE_DIR):
+                    path = os.path.join(THUMB_CACHE_DIR, f)
+                    if os.path.isfile(path) and now - os.path.getmtime(path) > CACHE_MAX_AGE:
+                        os.remove(path)
 
         except Exception as e:
             logger.error(f"Error in cache cleaner: {e}")
