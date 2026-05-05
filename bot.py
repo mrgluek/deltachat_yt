@@ -729,17 +729,26 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     video_size_str = "?? MB"
     audio_size_str = "?? MB"
     if duration:
-        # Audio: (duration * bitrate_kbps) / (8 * 1024)
+        # Audio estimation is very accurate because we force the bitrate
         bitrate = 128 if duration <= 1800 else 64
         audio_mb = (duration * bitrate) / 8192
-        audio_size_str = f"{audio_mb:.1f} MB"
+        audio_size_str = f"~{audio_mb:.1f} MB"
         
-        # Video 480p estimation: roughly 1.2 Mbps (0.15 MB/s)
-        video_mb = duration * 0.15
-        # If yt-dlp gave us an approximation, use it but cap at 50MB for the UI
-        if info.get('filesize_approx'):
-            video_mb = info['filesize_approx'] / 1048576
-        video_size_str = f"{min(video_mb, 50.0):.1f} MB"
+        # Video 480p estimation
+        video_mb = 0
+        # Try to find a real 480p format size in the metadata
+        for f in info.get('formats', []):
+            if f.get('height') == 480 and f.get('vcodec') != 'none':
+                fs = f.get('filesize') or f.get('filesize_approx')
+                if fs:
+                    video_mb = fs / 1048576
+                    break
+        
+        # Fallback if no format size found: use ~500kbps (0.06 MB/s)
+        if not video_mb:
+            video_mb = duration * 0.06
+            
+        video_size_str = f"~{min(video_mb, 50.0):.1f} MB"
 
     can_video = duration <= MAX_DURATION_VIDEO
     can_audio = duration <= MAX_DURATION_AUDIO
