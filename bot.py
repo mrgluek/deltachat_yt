@@ -52,6 +52,22 @@ class RefCountLock:
 _global_lock_mgr = threading.Lock()
 _download_locks: dict[str, RefCountLock] = {}
 
+_processed_msg_ids = set()
+_processed_msg_lock = threading.Lock()
+
+def _is_duplicate_msg(msg_id: int) -> bool:
+    with _processed_msg_lock:
+        if msg_id in _processed_msg_ids:
+            return True
+        _processed_msg_ids.add(msg_id)
+        if len(_processed_msg_ids) > 1000:
+            # Simple cleanup, keep only the latest 500 to avoid memory leak
+            # Since we just want to debounce immediate duplicates, this is fine
+            latest = list(_processed_msg_ids)[-500:]
+            _processed_msg_ids.clear()
+            _processed_msg_ids.update(latest)
+        return False
+
 @contextlib.contextmanager
 def get_download_lock(key: str):
     with _global_lock_mgr:
@@ -90,8 +106,10 @@ def _extract_video_id(text: str) -> str | None:
     m = YT_URL_RE.search(text)
     if m:
         return m.group(1)
-    if YT_ID_RE.match(text):
-        return text
+    # Also support ID prefixed with underscore (from command payload)
+    m_id = re.search(r'^_?([a-zA-Z0-9_-]{11})$', text)
+    if m_id:
+        return m_id.group(1)
     return None
 
 
@@ -591,6 +609,10 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
 def _handle_download_command(bot, accid, event, download_type: str, payload: str):
     """Common handler for /yt and /ytm commands."""
     msg = event.msg
+    
+    if _is_duplicate_msg(msg.id):
+        return
+        
     video_id = _extract_video_id(payload)
     if not video_id:
         _send(bot, accid, msg.chat_id,
@@ -736,6 +758,9 @@ def _get_help_text(bot, accid, from_id):
 def on_new_message(bot, accid, event):
     msg = event.msg
     
+    if _is_duplicate_msg(msg.id):
+        return
+        
     # 0. Safety checks: ignore info msgs, wrong account, or outbound msgs
     if msg.is_info or accid != dc_accid:
         return
@@ -756,31 +781,11 @@ def on_new_message(bot, accid, event):
     if not text:
         return
 
-    # 1. Handle /yt_VIDEOID and /ytm_VIDEOID commands
-    m = re.match(r'^/yt_([a-zA-Z0-9_-]{11})$', text)
-    if m:
-        video_id = m.group(1)
-        if _is_rate_limited(bot, accid, msg.from_id):
-            _send(bot, accid, msg.chat_id, f"⏱ Please wait {RATE_LIMIT_SECONDS}s between downloads.")
-            return
-        t = threading.Thread(target=_run_download, args=(bot, accid, msg, video_id, "video"), daemon=True)
-        t.start()
-        return
-
-    m = re.match(r'^/ytm_([a-zA-Z0-9_-]{11})$', text)
-    if m:
-        video_id = m.group(1)
-        if _is_rate_limited(bot, accid, msg.from_id):
-            _send(bot, accid, msg.chat_id, f"⏱ Please wait {RATE_LIMIT_SECONDS}s between downloads.")
-            return
-        t = threading.Thread(target=_run_download, args=(bot, accid, msg, video_id, "audio"), daemon=True)
-        t.start()
+    # 1. Ignore ALL commands (they are handled by @dc_cli.on(command=...))
+    if text.startswith('/'):
         return
 
     # 2. Auto-detect YouTube links and respond with info
-    if text.startswith('/'):
-        return  # Don't process other commands
-
     yt_match = YT_URL_RE.search(text)
     if yt_match:
         video_id = yt_match.group(1)
