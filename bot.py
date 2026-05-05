@@ -22,6 +22,7 @@ dc_cli = BotCli("ytbot")
 # Global references
 dc_bot_instance = None
 dc_accid = None
+dc_self_id = None
 
 # Rate limiting: {from_id: last_request_timestamp}
 _user_rate_limits: dict[int, float] = {}
@@ -638,9 +639,8 @@ def on_new_message(bot, accid, event):
     if msg.is_info or accid != dc_accid:
         return
 
-    # To check if outbound, compare from_id with bot's own contact id
-    bot_contact_id = bot.rpc.get_contact_id_by_addr(accid, bot.rpc.get_config(accid, "configured_addr"))
-    if msg.from_id == bot_contact_id:
+    # Check if outbound using cached self ID
+    if msg.from_id == dc_self_id:
         return
 
     # Track receiving stats
@@ -810,7 +810,13 @@ def on_init(bot, args):
     bg_thread.start()
 
     for accid in bot.rpc.get_all_account_ids():
+        global dc_accid, dc_self_id
         dc_accid = accid
+        try:
+            dc_self_id = bot.rpc.get_self_contact_id(accid)
+        except Exception:
+            dc_self_id = None
+        logger.info(f"Initialized with accid {accid}, self_id {dc_self_id}")
         bot.rpc.set_config(accid, "displayname", "YT Bot")
         bot.rpc.set_config(accid, "selfstatus",
                            "I download YouTube videos and audio. Send /help for commands.")
