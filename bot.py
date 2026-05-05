@@ -529,12 +529,16 @@ def _handle_download_command(bot, accid, event, download_type: str, payload: str
 @dc_cli.on(events.NewMessage(command="/yt"))
 def yt_command(bot, accid, event):
     """Download YouTube video."""
+    if event.msg.is_outbound or accid != dc_accid:
+        return
     _handle_download_command(bot, accid, event, "video", event.payload.strip())
 
 
 @dc_cli.on(events.NewMessage(command="/ytm"))
 def ytm_command(bot, accid, event):
     """Download YouTube audio."""
+    if event.msg.is_outbound or accid != dc_accid:
+        return
     _handle_download_command(bot, accid, event, "audio", event.payload.strip())
 
 
@@ -629,7 +633,9 @@ def _get_help_text(bot, accid, from_id):
 @dc_cli.on(events.NewMessage)
 def on_new_message(bot, accid, event):
     msg = event.msg
-    if msg.is_info:
+    
+    # 0. Safety checks: ignore info msgs, outbound msgs, or wrong account
+    if msg.is_info or msg.is_outbound or accid != dc_accid:
         return
 
     # Track receiving stats
