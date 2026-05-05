@@ -357,8 +357,11 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
     """Download audio. Returns (filepath, info_dict, error_string)."""
     fmt = "opus"
     if duration <= 600:
-        pp_args = ["--postprocessor-args", "ffmpeg:-ac 2 -ar 48000 -b:a 128k"]
+        # For short audio, use the original downloaded quality. 
+        # yt-dlp will just extract the opus stream without re-encoding, saving CPU.
+        pp_args = []
     else:
+        # For long podcasts, compress to 64k mono to save bandwidth
         pp_args = ["--postprocessor-args", "ffmpeg:-ac 1 -ar 24000 -b:a 64k"]
 
     out_template = os.path.join(output_dir, f"{video_id}.%(ext)s")
