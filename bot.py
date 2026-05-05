@@ -297,11 +297,28 @@ async def _download_audio(video_id: str, output_dir: str) -> tuple[str | None, d
 
         if proc.returncode != 0:
             err = stderr.decode(errors='replace').strip()
+            logger.error(f"yt-dlp audio failed (rc={proc.returncode}) for {video_id}: {err[:500]}")
             if "duration" in err.lower() or "filter" in err.lower():
                 return None, None, f"⏱ Video is longer than {MAX_DURATION // 60} minutes"
             return None, None, f"yt-dlp error: {err[:200]}"
 
-        info = json.loads(stdout) if stdout else {}
+        # Log raw output for debugging
+        stderr_text = stderr.decode(errors='replace').strip() if stderr else ""
+        if stderr_text:
+            logger.info(f"yt-dlp audio stderr for {video_id}: {stderr_text[:500]}")
+
+        info = {}
+        if stdout:
+            stdout_text = stdout.decode(errors='replace').strip()
+            logger.info(f"yt-dlp audio stdout length: {len(stdout_text)}, _filename in output: {'_filename' in stdout_text}")
+            try:
+                info = json.loads(stdout_text)
+                json_fn = info.get("_filename") or info.get("filename")
+                logger.info(f"yt-dlp reported _filename: {json_fn}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse yt-dlp JSON: {e}. First 200 chars: {stdout_text[:200]}")
+        else:
+            logger.warning(f"yt-dlp audio returned no stdout for {video_id}")
 
         # After -x conversion, the original file is deleted and replaced with .mp3
         # The JSON _filename points to the PRE-conversion file, so we search by video_id
