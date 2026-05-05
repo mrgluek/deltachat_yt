@@ -48,6 +48,15 @@ def init_db():
             )
         ''')
         
+        # URL shortener for full links (to keep commands clickable)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS url_map (
+                short_id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                created_at INTEGER DEFAULT (strftime('%s','now'))
+            )
+        ''')
+        
         conn.commit()
         conn.close()
 
@@ -176,5 +185,29 @@ def get_admin_fingerprint():
 def set_admin_fingerprint(fp):
     """Set the admin DC fingerprint."""
     set_config("admin_dc_fingerprint", fp)
+
+def add_url_mapping(short_id: str, url: str):
+    """Store a mapping between a short ID (hash) and a full URL."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO url_map (short_id, url) VALUES (?, ?)", (short_id, url))
+        # Cleanup old mappings (older than 7 days) to keep DB small
+        cursor.execute("DELETE FROM url_map WHERE created_at < CAST(strftime('%s','now') AS INTEGER) - 604800")
+        conn.commit()
+        conn.close()
+
+def resolve_url(short_id: str) -> str:
+    """Resolve a short ID back to the original full URL."""
+    # Strip leading underscore if present (from command payload)
+    if short_id.startswith("_"):
+        short_id = short_id[1:]
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT url FROM url_map WHERE short_id = ?", (short_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
 
 init_db()

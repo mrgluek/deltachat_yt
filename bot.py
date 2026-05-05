@@ -121,10 +121,15 @@ def _make_yt_url(video_id: str) -> str:
 
 
 def _extract_video_id(text: str) -> str | None:
-    """Extract YouTube video ID or recognize supported full URLs."""
+    """Extract YouTube video ID or recognize supported full URLs / short hashes."""
     text = text.strip()
     
-    # 1. Supported non-YouTube URLs: Return the FULL URL so yt-dlp knows where to download from
+    # 0. Check if it's a short hash for a full URL (stored in database)
+    resolved = database.resolve_url(text)
+    if resolved:
+        return resolved
+        
+    # 1. Supported non-YouTube URLs: Return the FULL URL
     m_supported = SUPPORTED_URL_RE.search(text)
     if m_supported:
         return m_supported.group(0)
@@ -134,12 +139,17 @@ def _extract_video_id(text: str) -> str | None:
     if m:
         return m.group(1)
         
-    # 3. Direct YouTube 11-char ID (possibly with leading underscore from payload)
-    m_id = re.search(r'^_?([a-zA-Z0-9_-]{11})$', text)
+    # 3. Direct YouTube 11-char ID or generic 16-char hash (possibly with leading underscore)
+    m_id = re.search(r'^_?([a-zA-Z0-9_-]{11,16})$', text)
     if m_id:
+        # If it's 16 chars, try resolving again just in case it was passed directly without command routing
+        if len(m_id.group(1)) == 16:
+            resolved = database.resolve_url(m_id.group(1))
+            if resolved:
+                return resolved
         return m_id.group(1)
         
-    # 4. If the user explicitly passed ANY full URL starting with http (for generic yt-dlp support)
+    # 4. If the user explicitly passed ANY full URL starting with http
     if text.startswith("http://") or text.startswith("https://"):
         return text
 
@@ -910,8 +920,11 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     lines = [f"📺 Video: \"{title}\" ({dur_str})", ""]
     
     if video_id.startswith("http://") or video_id.startswith("https://"):
-        vid_cmd = f"/yt {video_id}"
-        aud_cmd = f"/ytm {video_id}"
+        # Generate a short clickable command for full URLs
+        short_id = hashlib.md5(video_id.encode()).hexdigest()[:16]
+        database.add_url_mapping(short_id, video_id)
+        vid_cmd = f"/yt_{short_id}"
+        aud_cmd = f"/ytm_{short_id}"
     else:
         vid_cmd = f"/yt_{video_id}"
         aud_cmd = f"/ytm_{video_id}"
