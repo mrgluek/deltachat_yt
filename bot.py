@@ -382,6 +382,8 @@ def _run_download(bot, accid, msg, video_id: str, download_type: str):
         loop.close()
 
 
+_anti_spam_warnings: dict[str, float] = {}
+
 async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     """Actual download + send logic."""
     chat_id = msg.chat_id
@@ -391,7 +393,13 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     last_sent = database.get_last_download(chat_id, video_id, download_type)
     if time.time() - last_sent < ANTI_SPAM_SECONDS:
         _react(bot, accid, req_msg_id, "ℹ️")
-        _send(bot, accid, chat_id, "ℹ️ This video was already sent to this chat recently. Scroll up! 👆")
+        
+        # Debounce the warning message itself (don't spam the anti-spam)
+        warning_key = f"{chat_id}_{video_id}_{download_type}"
+        last_warning = _anti_spam_warnings.get(warning_key, 0)
+        if time.time() - last_warning > 10:  # Only warn once every 10 seconds
+            _anti_spam_warnings[warning_key] = time.time()
+            _send(bot, accid, chat_id, "ℹ️ This video was already sent to this chat recently. Scroll up! 👆")
         return
 
     # 2. Check cache first
