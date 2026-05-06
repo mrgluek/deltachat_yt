@@ -328,6 +328,9 @@ def _find_file_in_dir(directory: str, extensions: list[str]) -> str | None:
     return None
 
 
+# Proxy settings
+PROXY = os.getenv("PROXY")
+
 async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
     """Fetch video metadata without downloading. Returns (info, error_msg)."""
     url = _make_yt_url(video_id)
@@ -337,6 +340,9 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
     ]
     
+    if PROXY:
+        cmd.extend(["--proxy", PROXY])
+        
     cookies_path = os.path.join("data", "cookies.txt")
     if os.path.exists(cookies_path):
         cmd.extend(["--cookies", cookies_path])
@@ -352,6 +358,10 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
             return json.loads(stdout), None
         
         err = stderr.decode(errors='replace').strip()
+        # Clean up huge regional restriction errors
+        if "uploader has not made this video available in your country" in err:
+            err = "This video is not available in the bot's country/region."
+            
         logger.error(f"yt-dlp info fetch failed for {video_id}: {err}")
         return None, err[:200]
     except asyncio.TimeoutError:
@@ -378,6 +388,9 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
         "-o", out_template,
     ]
     
+    if PROXY:
+        cmd.extend(["--proxy", PROXY])
+        
     cookies_path = os.path.join("data", "cookies.txt")
     if os.path.exists(cookies_path):
         cmd.extend(["--cookies", cookies_path])
@@ -460,6 +473,9 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
         "-o", out_template,
     ]
     
+    if PROXY:
+        cmd.extend(["--proxy", PROXY])
+        
     cookies_path = os.path.join("data", "cookies.txt")
     if os.path.exists(cookies_path):
         cmd.extend(["--cookies", cookies_path])
