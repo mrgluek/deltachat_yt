@@ -132,13 +132,20 @@ def _make_yt_url(video_id: str) -> str:
 
 
 def _extract_video_id(text: str) -> str | None:
-    """Extract YouTube video ID or recognize supported full URLs / short hashes."""
+    """Extract YouTube video ID or recognize supported full URLs / short hashes.
+    
+    This function handles both raw IDs/URLs and full command strings 
+    (e.g. '/yt_ID' or '/yt URL') by using non-anchored searches.
+    """
     text = text.strip()
     
     # 0. Check if it's a short hash for a full URL (stored in database)
-    resolved = database.resolve_url(text)
-    if resolved:
-        return resolved
+    # We look for a 16-char hex hash at the end of the string, preceded by _ or space
+    m_hash = re.search(r'(?:^|[_ ])([a-f0-9]{16})$', text)
+    if m_hash:
+        resolved = database.resolve_url(m_hash.group(1))
+        if resolved:
+            return resolved
         
     # 1. Supported non-YouTube URLs: Return the FULL URL
     m_supported = SUPPORTED_URL_RE.search(text)
@@ -146,23 +153,26 @@ def _extract_video_id(text: str) -> str | None:
         return m_supported.group(0)
         
     # 2. YouTube URL -> 11-char ID
-    m = YT_URL_RE.search(text)
-    if m:
-        return m.group(1)
+    m_yt = YT_URL_RE.search(text)
+    if m_yt:
+        return m_yt.group(1)
         
-    # 3. Direct YouTube 11-char ID or generic 16-char hash (possibly with leading underscore)
-    m_id = re.search(r'^_?([a-zA-Z0-9_-]{11,16})$', text)
+    # 3. Direct YouTube 11-char ID or generic 11-16 char ID
+    # Matches IDs at the end of the string, preceded by start of string, space, or underscore.
+    m_id = re.search(r'(?:^|[_ ])([a-zA-Z0-9_-]{11,16})$', text)
     if m_id:
-        # If it's 16 chars, try resolving again just in case it was passed directly without command routing
+        # Extra check: if it's 16 chars, it might be a hash we missed in step 0
         if len(m_id.group(1)) == 16:
             resolved = database.resolve_url(m_id.group(1))
             if resolved:
                 return resolved
         return m_id.group(1)
         
-    # 4. If the user explicitly passed ANY full URL starting with http
-    if text.startswith("http://") or text.startswith("https://"):
-        return text
+    # 4. Fallback: if there's an http link anywhere, return it
+    if "http://" in text or "https://" in text:
+        m_any_url = re.search(r'https?://[^\s]+', text)
+        if m_any_url:
+            return m_any_url.group(0)
 
     return None
 
@@ -744,14 +754,14 @@ def _handle_download_command(bot, accid, event, download_type: str, payload: str
 def yt_command(bot, accid, event):
     if accid != dc_accid:
         return
-    _handle_download_command(bot, accid, event, "video", event.payload.strip())
+    _handle_download_command(bot, accid, event, "video", event.msg.text)
 
 
 @dc_cli.on(events.NewMessage(command="/ytm"))
 def ytm_command(bot, accid, event):
     if accid != dc_accid:
         return
-    _handle_download_command(bot, accid, event, "audio", event.payload.strip())
+    _handle_download_command(bot, accid, event, "audio", event.msg.text)
 
 
 @dc_cli.on(events.NewMessage(command="/help"))
