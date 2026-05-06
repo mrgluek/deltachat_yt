@@ -103,9 +103,10 @@ YT_ID_RE = re.compile(r'^[a-zA-Z0-9_-]{11}$')
 
 # Other Supported Video URLs (PeerTube, Vimeo, VK, Twitter, Reddit, Insta, TikTok, etc.)
 SUPPORTED_URL_RE = re.compile(
-    r'https?://(?:www\.)?(?:'
+    r'https?://(?:www\.|m\.)?(?:'
     r'vimeo\.com/|'
     r'vk\.com/video|'
+    r'vkvideo\.ru/|'
     r'twitter\.com/|x\.com/|'
     r'reddit\.com/r/|'
     r'instagram\.com/|'
