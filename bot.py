@@ -119,6 +119,7 @@ SUPPORTED_URL_RE = re.compile(
     r'pinterest\.com/|'
     r'soundcloud\.com/|'
     r'imgur\.com/|'
+    r'facebook\.com/|'
     r'[^/]+/w/'  # PeerTube
     r')[^\s]+'
 )
