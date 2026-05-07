@@ -214,11 +214,25 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
     # Get self fingerprints to exclude them
     self_fps = set()
     try:
-        enc_info_self = bot.rpc.get_contact_encryption_info(accid, DC_CONTACT_ID_SELF)
-        if enc_info_self:
-            matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(enc_info_self.split()).replace(':', ''))
-            self_fps.update(m.upper() for m in matches)
+        # Get bot's own fingerprint reliably
+        bot_addr = bot.rpc.get_config(accid, "addr")
+        if bot_addr:
+            bot_contact_id = bot.rpc.get_contact_id_by_addr(accid, bot_addr)
+            if bot_contact_id:
+                enc_info_self = bot.rpc.get_contact_encryption_info(accid, bot_contact_id)
+                if enc_info_self:
+                    matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(enc_info_self.split()).replace(':', ''))
+                    self_fps.update(m.upper() for m in matches)
     except: pass
+
+    # Fallback to ID 1 if above failed
+    if not self_fps:
+        try:
+            enc_info_self = bot.rpc.get_contact_encryption_info(accid, 1)
+            if enc_info_self:
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(enc_info_self.split()).replace(':', ''))
+                self_fps.update(m.upper() for m in matches)
+        except: pass
 
     for args in [(accid, contact_id), (contact_id,)]:
         try:
@@ -226,9 +240,11 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
             if enc_info:
                 cleaned = "".join(enc_info.split()).replace(':', '')
                 matches = re.findall(r'[0-9a-fA-F]{32,64}', cleaned)
+                # Filter out bot's own fingerprints
                 valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
                 if valid_matches:
-                    return ",".join(valid_matches)
+                    # Return first valid match
+                    return valid_matches[0]
         except Exception:
             continue
     return None
