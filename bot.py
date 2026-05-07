@@ -196,25 +196,9 @@ def _format_size(size_bytes: int) -> str:
 # ── Admin helpers (from deltachat_ntfy pattern) ──
 
 def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
-    if contact:
-        get_val = getattr(contact, 'get', lambda k: getattr(contact, k, None))
-        for attr in ['fingerprint', 'key_fingerprint', 'public_key']:
-            val = get_val(attr)
-            if val:
-                matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', '').replace(':', ''))
-                if matches:
-                    return matches[0].upper()
-    try:
-        fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
-        if fp:
-            return fp.upper().replace(' ', '')
-    except Exception:
-        pass
-        
-    # Get self fingerprints to exclude them
     self_fps = set()
     try:
-        # Get bot's own fingerprint reliably
+        # Get bot's own fingerprint reliably at the very beginning
         bot_addr = bot.rpc.get_config(accid, "addr")
         if bot_addr:
             bot_contact_id = bot.rpc.get_contact_id_by_addr(accid, bot_addr)
@@ -225,14 +209,22 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                     self_fps.update(m.upper() for m in matches)
     except: pass
 
-    # Fallback to ID 1 if above failed
-    if not self_fps:
-        try:
-            enc_info_self = bot.rpc.get_contact_encryption_info(accid, 1)
-            if enc_info_self:
-                matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(enc_info_self.split()).replace(':', ''))
-                self_fps.update(m.upper() for m in matches)
-        except: pass
+    # Filter fingerprints from contact object
+    if contact:
+        get_val = getattr(contact, 'get', lambda k: getattr(contact, k, None))
+        for attr in ['fingerprint', 'key_fingerprint', 'public_key']:
+            val = get_val(attr)
+            if val:
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', '').replace(':', ''))
+                valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
+                if valid_matches:
+                    return valid_matches[0]
+    try:
+        fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
+        if fp and fp.upper().replace(' ', '') not in self_fps:
+            return fp.upper().replace(' ', '')
+    except Exception:
+        pass
 
     for args in [(accid, contact_id), (contact_id,)]:
         try:
