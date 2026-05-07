@@ -290,22 +290,65 @@ def _is_rate_limited(bot, accid, from_id) -> bool:
 
 
 def _send(bot, accid, chat_id, text, file=None):
-    """Send a message and track transport stats."""
+    """Send a message and track transport stats with failover."""
     msg_data = MsgData(text=text)
     if file:
         msg_data.file = file
+        
+    # Try to determine how many attempts we should make based on number of transports
     try:
-        msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
+        transports = bot.rpc.list_transports(accid)
+        max_attempts = max(2, len(transports))
+    except Exception:
+        transports = []
+        max_attempts = 2
+
+    for attempt in range(max_attempts):
         try:
-            addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
-            if addr:
-                database.increment_transport_sent(addr)
-        except Exception:
-            pass
-        return msg_id
-    except Exception as e:
-        logger.error(f"Failed to send msg to chat {chat_id}: {e}")
-        raise
+            msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
+            
+            # Track success stats
+            try:
+                addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
+                if addr:
+                    database.increment_transport_sent(addr)
+            except: pass
+            
+            return msg_id
+        except Exception as e:
+            error_str = str(e).lower()
+            logger.warning(f"Attempt {attempt + 1} failed to send message: {e}")
+            
+            # List of strings that suggest a transport/network level failure
+            transport_errors = ["network", "timeout", "connection", "unreachable", "smtp", "status 0", "socket", "refused", "auth"]
+            
+            if attempt < max_attempts - 1 and any(err in error_str for err in transport_errors):
+                try:
+                    current_addr = bot.rpc.get_config(accid, "addr")
+                    if not transports:
+                        transports = bot.rpc.list_transports(accid)
+                    
+                    if len(transports) > 1:
+                        for t in transports:
+                            t_addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
+                            if t_addr and t_addr != current_addr:
+                                logger.info(f"Switching transport from {current_addr} to backup: {t_addr}")
+                                try:
+                                    bot.rpc.set_config(accid, "addr", t_addr)
+                                    t_pw = t.get('password') if isinstance(t, dict) else getattr(t, 'password', None)
+                                    if t_pw:
+                                        bot.rpc.set_config(accid, "mail_pw", t_pw)
+                                    time.sleep(2)
+                                    break 
+                                except Exception as set_e:
+                                    logger.error(f"Failed to switch transport: {set_e}")
+                                    continue
+                except: pass
+            else:
+                break
+
+    logger.error(f"Final failure sending msg to chat {chat_id} after {max_attempts} attempts.")
+    return None
 
 
 def _react(bot, accid, msg_id, emoji: str):
@@ -1153,6 +1196,18 @@ def on_start(bot, _args):
     accounts = bot.rpc.get_all_account_ids()
     if accounts:
         dc_accid = accounts[0]
+        
+        # Show configured transports
+        try:
+            transports = bot.rpc.list_transports(dc_accid)
+            print("\n" + "=" * 50)
+            print("Configured Bot Transports (Relays):")
+            for t in transports:
+                a = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
+                print(f" - {a}")
+        except Exception:
+            pass
+
         try:
             import io
             try:
@@ -1161,8 +1216,7 @@ def on_start(bot, _args):
                 qrcode = None
 
             qrdata = bot.rpc.get_chat_securejoin_qr_code(dc_accid, None)
-            print("\n" + "=" * 50)
-            print("To add this bot, scan the QR code or copy the link:\n")
+            print("\nTo add this bot, scan the QR code or copy the link:\n")
             if qrcode:
                 qr = qrcode.QRCode(version=1, box_size=1, border=2)
                 qr.add_data(qrdata)
@@ -1178,6 +1232,37 @@ def on_start(bot, _args):
 
 if __name__ == "__main__":
     import sys
+    
+    # Handle 'init transport' CLI command
+    if len(sys.argv) > 2 and sys.argv[1] == "init" and sys.argv[2] == "transport":
+        if len(sys.argv) < 5:
+            print("Usage: python bot.py init transport <email> <password>")
+            sys.exit(1)
+            
+        addr, password = sys.argv[3], sys.argv[4]
+        
+        # We need to manually initialize RPC to add transport without starting the bot
+        from deltachat2 import Rpc, IOTransport
+        from appdirs import user_config_dir
+        
+        config_dir = user_config_dir("ytbot")
+        accounts_dir = os.path.join(config_dir, "accounts")
+        
+        try:
+            with IOTransport(accounts_dir=accounts_dir) as trans:
+                rpc = Rpc(trans)
+                accids = rpc.get_all_account_ids()
+                if not accids:
+                    print("Error: No accounts configured. Run 'python bot.py init addr password' first.")
+                    sys.exit(1)
+                    
+                rpc.add_or_update_transport(accids[0], {"addr": addr, "password": password})
+                print(f"Success: Backup transport {addr} added.")
+        except Exception as e:
+            print(f"Error adding transport: {e}")
+            sys.exit(1)
+        sys.exit(0)
+
     if len(sys.argv) == 1:
         sys.argv.append("serve")
     dc_cli.start()
