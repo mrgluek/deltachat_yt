@@ -218,7 +218,7 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                 matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', '').replace(':', ''))
                 valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
                 if valid_matches:
-                    return valid_matches[0]
+                    return ",".join(valid_matches)
     try:
         fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
         if fp and fp.upper().replace(' ', '') not in self_fps:
@@ -235,8 +235,7 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                 # Filter out bot's own fingerprints
                 valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
                 if valid_matches:
-                    # Return first valid match
-                    return valid_matches[0]
+                    return ",".join(valid_matches)
         except Exception:
             continue
     return None
