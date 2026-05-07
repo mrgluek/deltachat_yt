@@ -908,10 +908,15 @@ def _get_help_text(bot, accid, from_id):
     )
 
     admin_email = database.get_config("admin_dc_email")
+    is_actually_admin = _is_dc_admin(bot, accid, from_id)
+    
     if not admin_email:
         help_text += "\n/initadmin — Claim bot ownership\n"
-    elif _is_dc_admin(bot, accid, from_id):
+    elif is_actually_admin:
         help_text += f"\n👑 **Admin:** `{admin_email}`\n"
+        help_text += "\n**Admin Commands:**\n"
+        help_text += "/transports — Show mail relays and stats\n"
+        help_text += "/rmtransport <email> — Remove a mail relay\n"
 
     return help_text
 
