@@ -956,12 +956,14 @@ def _get_help_text(bot, accid, from_id):
     )
 
     admin_email = database.get_config("admin_dc_email")
+    admin_fp = database.get_admin_fingerprint()
     is_actually_admin = _is_dc_admin(bot, accid, from_id)
     
     if not admin_email:
         help_text += "\n/initadmin — Claim bot ownership\n"
     elif is_actually_admin:
-        help_text += f"\n👑 **Admin:** `{admin_email}`\n"
+        fp_suffix = f" ({admin_fp[-8:].upper()})" if admin_fp else ""
+        help_text += f"\n👑 **Admin:** `{admin_email}`{fp_suffix}\n"
         help_text += "\n**Admin Commands:**\n"
         help_text += "/transports — Show mail relays and stats\n"
         help_text += "/rmtransport <email> — Remove a mail relay\n"
@@ -1250,7 +1252,13 @@ def on_start(bot, _args):
     if accounts:
         dc_accid = accounts[0]
         
-        # Show configured transports
+        # Show configured admin and transports
+        admin_email = database.get_config("admin_dc_email")
+        admin_fp = database.get_admin_fingerprint()
+        if admin_email:
+            fp_suffix = f" ({admin_fp[-8:].upper()})" if admin_fp else ""
+            print(f"Bot Administrator: {admin_email}{fp_suffix}")
+            
         try:
             transports = bot.rpc.list_transports(dc_accid)
             print("\n" + "=" * 50)
