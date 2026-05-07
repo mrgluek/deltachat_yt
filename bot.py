@@ -273,8 +273,6 @@ def _is_dc_admin(bot, accid, contact_id):
     except Exception as e:
         logger.error(f"Critical error in admin check: {e}")
     return False
-        logger.error(f"Critical error in admin check: {e}")
-    return False
 
 
 def _is_rate_limited(bot, accid, from_id) -> bool:
