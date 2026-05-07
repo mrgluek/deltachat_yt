@@ -235,44 +235,44 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
 
 
 def _is_dc_admin(bot, accid, contact_id):
-    """
-    Checks if contact_id is the admin.
-    Priority: Fingerprint (if set) > Email.
-    """
+    """Check if the given contact is the bot administrator (by email or fingerprint)."""
     try:
-        admin_fp = database.get_admin_fingerprint()
-        admin_email = database.get_config("admin_dc_email")
-
-        # If no admin is configured at all, no one is admin
-        if not admin_fp and not admin_email:
-            return False
-
         contact = None
         try:
             contact = bot.rpc.get_contact(accid, contact_id)
         except Exception:
             pass
-
+        
         if not contact:
             return False
 
-        # 1. If fingerprint is set in DB, we prefer checking it
+        # Safety check: bot itself is never the admin
+        if contact_id == 1:
+            return False
+
+        # 1. Check fingerprint (strongest)
+        admin_fp = database.get_admin_fingerprint()
         if admin_fp:
             c_fp = _get_contact_fingerprint(bot, accid, contact_id, contact=contact)
             if c_fp:
+                # c_fp might be a comma-separated list if multiple keys were found
                 if admin_fp.upper() in c_fp.upper().split(','):
                     return True
-                # If fingerprints exist but don't match, we don't trust the email!
-                return False
-            # If we expect a fingerprint but contact doesn't have one yet,
-            # we fall through to email check ONLY if email is also set.
-
-        # 2. Check email
-        if admin_email and contact.address:
-            if admin_email.strip().lower() == contact.address.strip().lower():
-                return True
-
+            
+            # If fingerprint is set but didn't match (or couldn't be retrieved), 
+            # we REJECT even if email matches (security hardening)
+            logger.warning(f"Admin check: Fingerprint mismatch or missing for {contact_id}")
+            return False
+        
+        # 2. Check email (legacy or initial setup before /initadmin)
+        sender_email = contact.address
+        admin_email = database.get_config("admin_dc_email")
+        if admin_email and sender_email and admin_email.lower().strip() == sender_email.lower().strip():
+            return True
+            
     except Exception as e:
+        logger.error(f"Critical error in admin check: {e}")
+    return False
         logger.error(f"Critical error in admin check: {e}")
     return False
 
