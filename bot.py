@@ -994,15 +994,15 @@ def _get_help_text(bot, accid, from_id):
         f"👋 Hi {sender_email}!\n\n"
         f"I download YouTube videos and audio.\n\n"
         f"**Commands:**\n"
-        f"/yt <url> — Download video (MP4 H.264+AAC 480p, ≤50MB)\n"
+        f"/yt <url> — Download video (MP4 360-480p, ≤30MB)\n"
         f"/yt_<video_id> — Download video by ID\n"
-        f"/ytm <url> — Download audio (Opus 128kbps stereo < 10 min, 64kbps mono >= 10 min, ≤50MB)\n"
+        f"/ytm <url> — Download audio (Opus 128kbps stereo < 10 min, 64kbps mono >= 10 min, ≤30MB)\n"
         f"/ytm_<video_id> — Download audio by ID\n"
         f"/stats — Download statistics\n"
         f"/donate — Support development ❤️\n"
         f"/help — This message\n\n"
         f"💡 _You can also just paste a YouTube link and I'll show you download options._\n\n"
-        f"⏱ Max duration: video {MAX_DURATION_VIDEO // 60}m, audio {MAX_DURATION_AUDIO // 60}m | Max file: 50 MB\n"
+        f"⏱ Max duration: video {MAX_DURATION_VIDEO // 60}m, audio {MAX_DURATION_AUDIO // 60}m | Max file: 30 MB\n"
     )
 
     admin_email = database.get_config("admin_dc_email")
