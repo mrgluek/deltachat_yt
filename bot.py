@@ -476,7 +476,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
         "--no-playlist",
         "--match-filter", f"duration<={MAX_DURATION_VIDEO}",
         "-f", f"b[ext=mp4][height<={max_height}]/bv[ext=mp4][height<={max_height}]+ba[ext=m4a]/b[height<={max_height}]/b",
-        "--max-filesize", "40M",
+        "--max-filesize", "30M",
         "--merge-output-format", "mp4",
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
@@ -514,7 +514,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
             logger.warning(f"yt-dlp video returned no stdout for {video_id}. Stderr: {err}")
             
             if "filesize" in err.lower():
-                return None, None, "📦 Video exceeds 40 MB size limit"
+                return None, None, "📦 Video exceeds 30 MB size limit"
             if "duration" in err.lower():
                 return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
             
@@ -534,9 +534,9 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
                 filepath = _find_file_in_dir(output_dir, ['.mp4', '.mkv', '.webm'], prefix=video_id)
         if filepath and os.path.exists(filepath):
             size = os.path.getsize(filepath)
-            if size > 40 * 1024 * 1024:
+            if size > 30 * 1024 * 1024:
                 os.remove(filepath)
-                return None, info, "📦 Downloaded file exceeds 40 MB"
+                return None, info, "📦 Downloaded file exceeds 30 MB"
             return filepath, info, None
         
         logger.error(f"Video file not found for {video_id}. Expected: {filepath}. Dir contents: {os.listdir(output_dir)}")
@@ -623,9 +623,9 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
 
         if filepath and os.path.exists(filepath):
             size = os.path.getsize(filepath)
-            if size > 40 * 1024 * 1024:
+            if size > 30 * 1024 * 1024:
                 os.remove(filepath)
-                return None, info, "📦 Audio file exceeds 40 MB"
+                return None, info, "📦 Audio file exceeds 30 MB"
             return filepath, info, None
         
         logger.error(f"Audio file not found for {video_id}. Expected: {filepath}. Dir contents: {os.listdir(output_dir)}")
@@ -755,8 +755,9 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
                 tmpdir = tempfile.mkdtemp(prefix="ytbot_")
                 try:
                     if download_type == "video":
-                        filepath, info, error = await _download_video(video_id, tmpdir, max_height=480)
-                        if error and ("40 MB" in error or "filtered" in error.lower()):
+                        initial_height = 360 if duration > 600 else 480
+                        filepath, info, error = await _download_video(video_id, tmpdir, max_height=initial_height)
+                        if initial_height == 480 and error and ("30 MB" in error or "filtered" in error.lower()):
                             logger.info(f"Retrying {video_id} with 360p because of size/filter...")
                             filepath, info, error = await _download_video(video_id, tmpdir, max_height=360)
                     else:
