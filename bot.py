@@ -519,6 +519,8 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
                 os.remove(filepath)
                 return None, info, "📦 Downloaded file exceeds 50 MB"
             return filepath, info, None
+        
+        logger.error(f"Video file not found for {video_id}. Expected: {filepath}. Dir contents: {os.listdir(output_dir)}")
         return None, info, "Download completed but file not found"
     except asyncio.TimeoutError:
         try:
@@ -607,7 +609,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
                 return None, info, "📦 Audio file exceeds 50 MB"
             return filepath, info, None
         
-        logger.error(f"Audio file not found for {video_id}. Dir contents: {os.listdir(output_dir)}")
+        logger.error(f"Audio file not found for {video_id}. Expected: {filepath}. Dir contents: {os.listdir(output_dir)}")
         return None, info, "Download completed but file not found"
     except asyncio.TimeoutError:
         try:
