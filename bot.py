@@ -468,14 +468,14 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
         return None, str(e)
 
 
-async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, dict | None, str | None]:
+async def _download_video(video_id: str, output_dir: str, max_height: int = 480) -> tuple[str | None, dict | None, str | None]:
     """Download video. Returns (filepath, info_dict, error_string)."""
     out_template = os.path.join(output_dir, "%(id)s_%(title).50s.%(ext)s")
     cmd = [
         "yt-dlp",
         "--no-playlist",
         "--match-filter", f"duration<={MAX_DURATION_VIDEO}",
-        "-f", "b[ext=mp4][height<=480]/bv[ext=mp4][height<=480]+ba[ext=m4a]/b",
+        "-f", f"b[ext=mp4][height<={max_height}]/bv[ext=mp4][height<={max_height}]+ba[ext=m4a]/b[height<={max_height}]/b",
         "--max-filesize", "50M",
         "--merge-output-format", "mp4",
         "--no-warnings",
@@ -755,7 +755,10 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
                 tmpdir = tempfile.mkdtemp(prefix="ytbot_")
                 try:
                     if download_type == "video":
-                        filepath, info, error = await _download_video(video_id, tmpdir)
+                        filepath, info, error = await _download_video(video_id, tmpdir, max_height=480)
+                        if error and ("50 MB" in error or "filtered" in error.lower()):
+                            logger.info(f"Retrying {video_id} with 360p because of size/filter...")
+                            filepath, info, error = await _download_video(video_id, tmpdir, max_height=360)
                     else:
                         filepath, info, error = await _download_audio(video_id, tmpdir, duration)
     
