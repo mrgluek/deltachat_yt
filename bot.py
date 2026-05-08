@@ -1151,6 +1151,7 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
     audio_fmt = "Opus"
     
     # Size estimation
+    target_height = 360 if duration > 600 else 480
     video_size_str = "?? MB"
     audio_size_str = "?? MB"
     if duration:
@@ -1159,19 +1160,21 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
         audio_mb = (duration * bitrate) / 8192
         audio_size_str = f"~{audio_mb:.1f} MB"
         
-        # Video 480p estimation
+        # Video estimation
         video_mb = 0
         for f in info.get('formats', []):
-            if f.get('height') == 480 and f.get('vcodec') != 'none':
+            if f.get('height') == target_height and f.get('vcodec') != 'none':
                 fs = f.get('filesize') or f.get('filesize_approx')
                 if fs:
                     video_mb = fs / 1048576
                     break
         
         if not video_mb:
-            video_mb = duration * 0.06
+            # 480p ~0.06 MB/s, 360p ~0.035 MB/s
+            rate = 0.035 if target_height == 360 else 0.06
+            video_mb = duration * rate
             
-        video_size_str = f"~{min(video_mb, 50.0):.1f} MB"
+        video_size_str = f"~{min(video_mb, 30.0):.1f} MB"
 
     can_video = duration <= MAX_DURATION_VIDEO
     can_audio = duration <= MAX_DURATION_AUDIO
@@ -1188,7 +1191,7 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
         aud_cmd = f"/ytm_{video_id}"
     
     if can_video:
-        lines.append(f"Download video 480p ({video_size_str}): {vid_cmd}")
+        lines.append(f"Download video {target_height}p ({video_size_str}): {vid_cmd}")
     else:
         lines.append(f"⚠️ Video too long (> {MAX_DURATION_VIDEO // 60}m)")
         
