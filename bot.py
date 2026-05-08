@@ -491,8 +491,15 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
             return None, None, f"yt-dlp error: {err[:200]}"
 
         if not stdout:
-            logger.warning(f"yt-dlp video returned no stdout for {video_id} (likely filtered out by duration)")
-            return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
+            err = stderr.decode(errors='replace').strip()
+            logger.warning(f"yt-dlp video returned no stdout for {video_id}. Stderr: {err}")
+            
+            if "filesize" in err.lower():
+                return None, None, "📦 Video exceeds 50 MB size limit"
+            if "duration" in err.lower():
+                return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
+            
+            return None, None, "⚠️ Video was filtered out (possibly too large or restricted)"
 
         info = json.loads(stdout) if stdout else {}
         filepath = info.get("_filename") or info.get("filename")
@@ -521,6 +528,7 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
             pass
         return None, None, "⏱ Download timed out (5 min limit)"
     except Exception as e:
+        logger.error(f"Error in _download_video for {video_id}: {e}")
         return None, None, f"Error: {e}"
 
 
@@ -567,15 +575,14 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
 
-        if proc.returncode != 0:
+        if not stdout:
             err = stderr.decode(errors='replace').strip()
-            if "duration" in err.lower() or "filter" in err.lower():
+            logger.warning(f"yt-dlp audio returned no stdout for {video_id}. Stderr: {err}")
+            if "duration" in err.lower():
                 return None, None, f"⏱ Audio is longer than {MAX_DURATION_AUDIO // 60} minutes"
-            return None, None, f"yt-dlp error: {err[:200]}"
+            return None, None, "⚠️ Audio was filtered out or restricted"
 
-        info = {}
-        if stdout:
-            info = json.loads(stdout.decode(errors='replace').strip())
+        info = json.loads(stdout.decode(errors='replace').strip())
 
         filepath = None
         expected_path = os.path.join(output_dir, f"{safe_id}.opus")
