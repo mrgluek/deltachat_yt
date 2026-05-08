@@ -395,15 +395,34 @@ def _get_cache_path(video_id: str, download_type: str) -> str:
 
 # ── yt-dlp wrappers ──
 
-def _find_file_in_dir(directory: str, extensions: list[str]) -> str | None:
-    """Find the first file in directory matching any of the given extensions."""
+def _find_file_in_dir(directory: str, extensions: list[str] = None, prefix: str = None) -> str | None:
+    """Find a file in directory matching extensions and/or prefix. Returns the largest match."""
     if not os.path.isdir(directory):
         return None
+    candidates = []
     for f in os.listdir(directory):
         fpath = os.path.join(directory, f)
-        if os.path.isfile(fpath) and any(f.lower().endswith(ext) for ext in extensions):
-            return fpath
-    return None
+        if not os.path.isfile(fpath):
+            continue
+        
+        match_ext = not extensions or any(f.lower().endswith(ext.lower()) for ext in extensions)
+        match_prefix = not prefix or f.lower().startswith(prefix.lower())
+        
+        if match_ext and match_prefix:
+            candidates.append(fpath)
+    
+    if not candidates and prefix:
+        # Fallback: ignore extensions if we have a prefix and no match found
+        for f in os.listdir(directory):
+            fpath = os.path.join(directory, f)
+            if os.path.isfile(fpath) and f.lower().startswith(prefix.lower()):
+                candidates.append(fpath)
+                
+    if not candidates:
+        return None
+        
+    # Return the largest file (to avoid picking up small .temp or .ytdl files)
+    return max(candidates, key=os.path.getsize)
 
 
 # Proxy settings
@@ -451,7 +470,7 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
 
 async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, dict | None, str | None]:
     """Download video. Returns (filepath, info_dict, error_string)."""
-    out_template = os.path.join(output_dir, "%(title).50s.%(ext)s")
+    out_template = os.path.join(output_dir, "%(id)s_%(title).50s.%(ext)s")
     cmd = [
         "yt-dlp",
         "--no-playlist",
@@ -512,7 +531,7 @@ async def _download_video(video_id: str, output_dir: str) -> tuple[str | None, d
                         filepath = candidate
                         break
             if not filepath or not os.path.exists(filepath):
-                filepath = _find_file_in_dir(output_dir, ['.mp4', '.mkv', '.webm'])
+                filepath = _find_file_in_dir(output_dir, ['.mp4', '.mkv', '.webm'], prefix=video_id)
         if filepath and os.path.exists(filepath):
             size = os.path.getsize(filepath)
             if size > 50 * 1024 * 1024:
@@ -600,7 +619,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
                         filepath = candidate
                         break
             if not filepath:
-                filepath = _find_file_in_dir(output_dir, ['.opus', '.mp3', '.m4a', '.webm'])
+                filepath = _find_file_in_dir(output_dir, ['.opus', '.mp3', '.m4a', '.webm'], prefix=safe_id)
 
         if filepath and os.path.exists(filepath):
             size = os.path.getsize(filepath)
