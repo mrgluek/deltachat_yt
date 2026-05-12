@@ -434,8 +434,10 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
     cmd = [
         "yt-dlp", "--no-playlist", "--dump-json", "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--extractor-args", "youtube:player_client=android_creator,web_embedded",
+        "--extractor-args", "youtube:player_client=android,web_embedded",
         "--no-cache-dir",
+        "--no-config",
+        "--add-header", "Accept-Language: en-US,en;q=0.9",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     ]
     
@@ -482,8 +484,10 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
         "--merge-output-format", "mp4",
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--extractor-args", "youtube:player_client=android_creator,web_embedded",
+        "--extractor-args", "youtube:player_client=android,web_embedded",
         "--no-cache-dir",
+        "--no-config",
+        "--add-header", "Accept-Language: en-US,en;q=0.9",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "--print-json",
         "-o", out_template,
@@ -579,8 +583,10 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
     ] + pp_args + [
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--extractor-args", "youtube:player_client=android_creator,web_embedded",
+        "--extractor-args", "youtube:player_client=android,web_embedded",
         "--no-cache-dir",
+        "--no-config",
+        "--add-header", "Accept-Language: en-US,en;q=0.9",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "--print-json",
         "-o", out_template,
