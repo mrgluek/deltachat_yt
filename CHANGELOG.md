@@ -2,7 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-05-12
+
+### Added
+- **Age-Restricted & VEVO Support:** Optional `data/cookies.txt` authentication for downloading age-restricted and VEVO-locked videos.
+- **Deno JS Runtime:** Added Deno + `yt-dlp[default]` (yt-dlp-ejs) to the Docker image to solve YouTube's n-challenge and fix "Requested format is not available" errors.
+- **Dynamic Resolution:** Videos over 10 minutes are automatically downloaded at 360p to stay within the file size limit. Short videos use 480p.
+- **Resolution Fallback:** If a video exceeds the 30 MB limit at 480p, the bot automatically retries at 360p.
+- **Improved Error Reporting:** Downloads that are silently filtered by yt-dlp now report the actual reason (size/duration/restriction) from stderr.
+
+### Changed
+- **File size limit lowered to 30 MB** (from 50 MB) to ensure reliable email delivery after Base64 encoding overhead.
+- **Short YouTube links:** Captions now use `youtu.be/ID` format instead of `www.youtube.com/watch?v=ID`.
+- Updated help text and info messages to reflect the 30 MB limit and dynamic resolution.
+- `_find_file_in_dir` now returns the largest matching file and supports filename prefix filtering for more reliable file detection after download.
+
 ## [1.3.0] - 2026-05-05
+
 6: 
 7: ### Added
 8: - **Multi-Service Support:** Support for PeerTube, Rutube, Vimeo, VK, Twitter, Reddit, Instagram, TikTok, and more.

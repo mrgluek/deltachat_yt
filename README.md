@@ -1,11 +1,11 @@
 # Delta Chat YouTube Bot
 
-A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. Designed to stay within Delta Chat's 50MB file limit and ensure maximum compatibility across all platforms.
+A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. Designed to stay within email delivery limits (30 MB) and ensure maximum compatibility across all platforms.
 
 ## Features
 
 - **Multi-Service Support:** Downloads from YouTube, **PeerTube, Rutube, Dzen, OK.ru, Coub, Pinterest, SoundCloud, Imgur, Facebook, Vimeo, VK, vkvideo.ru, Twitter, Reddit, Instagram, TikTok, Twitch, Bilibili** and more via `yt-dlp`.
-- **Video Downloads (`/yt`):** Downloads video in MP4 (H.264 + AAC) at 480p. Optimized for speed using pre-muxed formats to avoid server-side re-encoding.
+- **Video Downloads (`/yt`):** Downloads video in MP4 (H.264 + AAC) at **360p or 480p** (automatically uses 360p for videos over 10 minutes to stay within size limits).
 - **Audio Downloads (`/ytm`):** Extracts audio as high-quality Opus. Optimized to skip re-encoding for short clips to preserve original quality.
 - **Auto-Detection:** Automatically detects links in chat and provides download options with **video thumbnails** and estimated file sizes.
 - **Fast Commands:** Use `/yt_VIDEOID` or `/ytm_VIDEOID` (for YouTube) or `/yt URL` (generic) for quick downloads.
@@ -18,7 +18,7 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 - **Smart Limits & Security:**
   - Maximum video duration: 30 minutes.
   - Maximum audio duration: 60 minutes.
-  - Maximum file size: 50 MB.
+  - Maximum file size: **30 MB** (safe for email delivery after Base64 encoding).
   - Rate limiting: 1 request per minute (admin exempt).
   - Global download queue: Max 5 concurrent downloads.
   - Handler-specific debouncing: Prevents race conditions and duplicate sends.
@@ -72,6 +72,16 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
    ```
 
 6. Add the bot in Delta Chat and send `/initadmin` to claim ownership.
+
+## Cookies (Age-Restricted & VEVO Content)
+
+To download age-restricted or VEVO-locked videos, place a valid YouTube `cookies.txt` (Netscape format) in the `data/` directory:
+
+```bash
+cp cookies.txt ~/deltachat_yt/data/
+```
+
+Export cookies using the **"Get cookies.txt LOCALLY"** browser extension. Use a dedicated Google account — not your primary one. The bot will detect and use the file automatically on every request.
 
 ## Admin Management
 
