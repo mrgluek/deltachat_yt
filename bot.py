@@ -434,7 +434,7 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
     cmd = [
         "yt-dlp", "--no-playlist", "--dump-json", "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "--extractor-args", "youtube:player_client=web,mweb",
     ]
     
     if PROXY:
@@ -480,7 +480,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
         "--merge-output-format", "mp4",
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "--extractor-args", "youtube:player_client=web,mweb",
         "--print-json",
         "-o", out_template,
     ]
@@ -506,7 +506,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
             if "duration" in err.lower() or "filter" in err.lower():
                 return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
             if "max-filesize" in err.lower() or "filesize" in err.lower():
-                return None, None, "📦 Video exceeds 50 MB size limit"
+                return None, None, "📦 Video exceeds 30 MB size limit"
             return None, None, f"yt-dlp error: {err[:200]}"
 
         if not stdout:
@@ -575,7 +575,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
     ] + pp_args + [
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "--extractor-args", "youtube:player_client=web,mweb",
         "--print-json",
         "-o", out_template,
     ]
