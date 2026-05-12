@@ -128,7 +128,7 @@ SUPPORTED_URL_RE = re.compile(
 def _make_yt_url(video_id: str) -> str:
     if video_id.startswith("http://") or video_id.startswith("https://"):
         return video_id
-    return f"https://www.youtube.com/watch?v={video_id}"
+    return f"https://youtu.be/{video_id}"
 
 
 def _extract_video_id(text: str) -> str | None:
