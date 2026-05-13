@@ -434,7 +434,7 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
     cmd = [
         "yt-dlp", "--no-playlist", "--dump-json", "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--extractor-args", "youtube:player_client=android,web_embedded",
+        "--extractor-args", "youtube:player_client=android,web",
         "--js-runtimes", "deno:/root/.deno/bin/deno",
         "--no-cache-dir",
         "--no-config",
@@ -485,7 +485,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
         "--merge-output-format", "mp4",
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--extractor-args", "youtube:player_client=android,web_embedded",
+        "--extractor-args", "youtube:player_client=android,web",
         "--js-runtimes", "deno:/root/.deno/bin/deno",
         "--no-cache-dir",
         "--no-config",
@@ -585,7 +585,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
     ] + pp_args + [
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--extractor-args", "youtube:player_client=android,web_embedded",
+        "--extractor-args", "youtube:player_client=android,web",
         "--js-runtimes", "deno:/root/.deno/bin/deno",
         "--no-cache-dir",
         "--no-config",
