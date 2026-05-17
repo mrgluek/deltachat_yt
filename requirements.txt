@@ -1,3 +1,4 @@
 deltabot-cli @ git+https://github.com/deltachat-bot/deltabot-cli-py.git
 yt-dlp[default]
 qrcode
+curl-cffi
