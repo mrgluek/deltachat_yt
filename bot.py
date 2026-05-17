@@ -127,10 +127,6 @@ SUPPORTED_URL_RE = re.compile(
 
 def _make_yt_url(video_id: str) -> str:
     if video_id.startswith("http://") or video_id.startswith("https://"):
-        if "vk.com/" in video_id and "m.vk.com/" not in video_id:
-            return video_id.replace("vk.com/", "m.vk.com/")
-        if "vkvideo.ru/" in video_id and "m.vkvideo.ru/" not in video_id:
-            return video_id.replace("vkvideo.ru/", "m.vkvideo.ru/")
         return video_id
     return f"https://youtu.be/{video_id}"
 
