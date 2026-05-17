@@ -127,6 +127,10 @@ SUPPORTED_URL_RE = re.compile(
 
 def _make_yt_url(video_id: str) -> str:
     if video_id.startswith("http://") or video_id.startswith("https://"):
+        if "vk.com/" in video_id and "m.vk.com/" not in video_id:
+            return video_id.replace("vk.com/", "m.vk.com/")
+        if "vkvideo.ru/" in video_id and "m.vkvideo.ru/" not in video_id:
+            return video_id.replace("vkvideo.ru/", "m.vkvideo.ru/")
         return video_id
     return f"https://youtu.be/{video_id}"
 
@@ -439,7 +443,6 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
         "--no-cache-dir",
         "--no-config",
         "--add-header", "Accept-Language: en-US,en;q=0.9",
-        "--impersonate", "chrome",
     ]
     
     if PROXY:
@@ -490,7 +493,6 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
         "--no-cache-dir",
         "--no-config",
         "--add-header", "Accept-Language: en-US,en;q=0.9",
-        "--impersonate", "chrome",
         "--print-json",
         "-o", out_template,
     ]
@@ -590,7 +592,6 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
         "--no-cache-dir",
         "--no-config",
         "--add-header", "Accept-Language: en-US,en;q=0.9",
-        "--impersonate", "chrome",
         "--print-json",
         "-o", out_template,
     ]
