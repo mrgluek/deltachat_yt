@@ -121,6 +121,7 @@ SUPPORTED_URL_RE = re.compile(
     r'soundcloud\.com/|'
     r'imgur\.com/|'
     r'facebook\.com/|'
+    r'music\.yandex\.(?:ru|com|by|kz)/|'
     r'[^/]+/w/'  # PeerTube
     r')[^\s]+'
 )

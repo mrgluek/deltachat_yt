@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.1] - 2026-05-18
+
+### Added
+- **Yandex Music Support:** Support for downloading tracks and albums from Yandex Music (`music.yandex.ru`, `.com`, `.by`, `.kz`).
+
 ## [1.4.0] - 2026-05-12
 
 ### Added
