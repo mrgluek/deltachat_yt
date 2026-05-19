@@ -884,41 +884,155 @@ def help_command(bot, accid, event):
 
 @dc_cli.on(events.NewMessage(command="/transports"))
 def transports_command(bot, accid, event):
+    """Show configured transports (mail relays) and their status."""
     msg = event.msg
     if not _is_dc_admin(bot, accid, msg.from_id):
-        _send(bot, accid, msg.chat_id, "❌ This command is only for the bot administrator.")
+        _send(bot, accid, msg.chat_id, "❌ Only the bot administrator can use /transports.")
         return
-        
+
     try:
         transports = bot.rpc.list_transports(accid)
-        reply = "🤖 **Configured Transports:**\n\n"
-        for t in transports:
-            a = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
-            reply += f"• {a}\n"
-        reply += "\nUse `/rmtransport <email>` to remove a relay."
-        _send(bot, accid, msg.chat_id, reply)
     except Exception as e:
         _send(bot, accid, msg.chat_id, f"❌ Failed to list transports: {e}")
+        return
 
+    if not transports:
+        _send(bot, accid, msg.chat_id, "No transports configured.")
+        return
+
+    # Get connectivity status
+    connectivity_label = "❓ Unknown"
+    try:
+        connectivity = bot.rpc.get_connectivity(accid)
+        if connectivity >= 4000:
+            connectivity_label = "🟢 Connected"
+        elif connectivity >= 3000:
+            connectivity_label = "🔄 Working"
+        elif connectivity >= 2000:
+            connectivity_label = "🟡 Connecting"
+        else:
+            connectivity_label = "🔴 Not connected"
+    except Exception:
+        pass
+
+    # Get per-transport statistics
+    stats_map = {}
+    for s in database.get_all_transport_stats():
+        stats_map[s['addr']] = s
+
+    transport_addrs = []
+    for t in transports:
+        addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
+        transport_addrs.append(addr)
+
+    reply = f"🔌 **Mail Relays (Transports)**\n\nStatus: {connectivity_label}\n\n"
+
+    for i, addr in enumerate(transport_addrs):
+        role = "🏠 Primary" if i == 0 else "🔄 Backup"
+        reply += f"**{role}:** `{addr}`\n"
+
+        stats = stats_map.get(addr)
+        if stats:
+            reply += f"  📤 Sent: {stats['msgs_sent']}  📥 Received: {stats['msgs_received']}\n"
+            if stats.get('last_sent_at'):
+                import datetime
+                last_sent = datetime.datetime.fromtimestamp(stats['last_sent_at']).strftime('%Y-%m-%d %H:%M')
+                reply += f"  Last sent: {last_sent}\n"
+            if stats.get('last_received_at'):
+                import datetime
+                last_recv = datetime.datetime.fromtimestamp(stats['last_received_at']).strftime('%Y-%m-%d %H:%M')
+                reply += f"  Last received: {last_recv}\n"
+        else:
+            reply += f"  📤 Sent: 0  📥 Received: 0\n"
+        reply += "\n"
+
+    reply += f"Total transports: {len(transport_addrs)}"
+    _send(bot, accid, msg.chat_id, reply)
+
+@dc_cli.on(events.NewMessage(command="/addtransport"))
+def addtransport_command(bot, accid, event):
+    """Add a backup mail relay (transport). Admin only."""
+    msg = event.msg
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _send(bot, accid, msg.chat_id, "❌ Only the bot administrator can use /addtransport.")
+        return
+
+    payload = event.payload.strip() if event.payload else ""
+    if not payload:
+        _send(bot, accid, msg.chat_id, 
+            "Usage:\n"
+            "/addtransport DCACCOUNT:server.example\n"
+            "/addtransport user@example.com password123"
+        )
+        return
+
+    try:
+        if payload.startswith("DCACCOUNT:"):
+            bot.rpc.add_transport_from_qr(accid, payload)
+            _send(bot, accid, msg.chat_id, "✅ Backup transport added via chatmail URI.")
+        else:
+            parts = payload.split(None, 1)
+            if len(parts) < 2:
+                _send(bot, accid, msg.chat_id, 
+                    "❌ For email accounts, provide both address and password:\n"
+                    "/addtransport user@example.com password123"
+                )
+                return
+            addr, password = parts[0], parts[1]
+            bot.rpc.add_or_update_transport(accid, {"addr": addr, "password": password})
+            _send(bot, accid, msg.chat_id, f"✅ Backup transport `{addr}` added.")
+    except Exception as e:
+        _send(bot, accid, msg.chat_id, f"❌ Failed to add transport: {e}")
+
+@dc_cli.on(events.NewMessage(command="/setprimary"))
+def setprimary_command(bot, accid, event):
+    """Set a specific transport as primary. Admin only."""
+    msg = event.msg
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _send(bot, accid, msg.chat_id, "❌ Only the bot administrator can use /setprimary.")
+        return
+
+    addr = event.payload.strip() if event.payload else ""
+    if not addr:
+        _send(bot, accid, msg.chat_id, "Usage: /setprimary user@example.com")
+        return
+
+    try:
+        bot.rpc.set_config(accid, "configured_addr", addr)
+        _send(bot, accid, msg.chat_id, f"✅ Primary address (`configured_addr`) is now `{addr}`.")
+    except Exception as e:
+        _send(bot, accid, msg.chat_id, f"❌ Failed to set primary address: {e}")
 
 @dc_cli.on(events.NewMessage(command="/rmtransport"))
 def rmtransport_command(bot, accid, event):
+    """Remove a mail relay (transport). Admin only."""
     msg = event.msg
     if not _is_dc_admin(bot, accid, msg.from_id):
-        _send(bot, accid, msg.chat_id, "❌ This command is only for the bot administrator.")
+        _send(bot, accid, msg.chat_id, "❌ Only the bot administrator can use /rmtransport.")
         return
-        
-    addr = (event.payload or "").strip()
+
+    addr = event.payload.strip() if event.payload else ""
     if not addr:
         _send(bot, accid, msg.chat_id, "Usage: /rmtransport user@example.com")
         return
 
     try:
         transports = bot.rpc.list_transports(accid)
-        if len(transports) <= 1:
+        transport_addrs = []
+        for t in transports:
+            a = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
+            transport_addrs.append(a)
+        if len(transport_addrs) <= 1:
             _send(bot, accid, msg.chat_id, "❌ Cannot remove the last transport.")
             return
-        
+        if addr not in transport_addrs:
+            _send(bot, accid, msg.chat_id, f"❌ Transport `{addr}` not found.")
+            return
+    except Exception as e:
+        _send(bot, accid, msg.chat_id, f"❌ Failed to check transports: {e}")
+        return
+
+    try:
         bot.rpc.delete_transport(accid, addr)
         _send(bot, accid, msg.chat_id, f"✅ Transport `{addr}` removed.")
     except Exception as e:
@@ -1028,8 +1142,10 @@ def _get_help_text(bot, accid, from_id):
         fp_suffix = f" ({admin_fp[-8:].upper()})" if admin_fp else ""
         help_text += f"\n👑 **Admin:** `{admin_email}`{fp_suffix}\n"
         help_text += "\n**Admin Commands:**\n"
-        help_text += "/transports — Show mail relays and stats\n"
-        help_text += "/rmtransport <email> — Remove a mail relay\n"
+        help_text += "/transports — Show configured mail relays & stats\n"
+        help_text += "/addtransport — Add a backup mail relay\n"
+        help_text += "/rmtransport <addr> — Remove a mail relay\n"
+        help_text += "/setprimary <addr> — Switch the primary mail relay\n"
 
     return help_text
 

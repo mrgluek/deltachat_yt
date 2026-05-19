@@ -36,6 +36,10 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 - `/help` - Show help message.
 - `/initadmin` - Claim bot ownership (first time setup).
 - `/donate` - Support the project.
+- `/transports` - Show configured mail relays & stats (Admin only).
+- `/addtransport` - Add a backup mail relay (Admin only).
+- `/rmtransport <addr>` - Remove a mail relay (Admin only).
+- `/setprimary <addr>` - Switch the primary mail relay (Admin only).
 
 ## Deployment
 
