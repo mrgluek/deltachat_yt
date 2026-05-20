@@ -1417,6 +1417,11 @@ def on_init(bot, args):
                            "I download YouTube videos and audio. Send /help for commands.")
         bot.rpc.set_config(accid, "delete_device_after", "3600")
         try:
+            bot.rpc.set_config(accid, "download_limit", "1")
+            bot.logger.info("Configured auto-download limit (1 byte) in on_init.")
+        except Exception as e:
+            bot.logger.warning(f"Could not configure storage optimization in on_init: {e}")
+        try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             for icon_name in ["icon.png", os.path.join("data", "icon.png")]:
                 icon_path = os.path.join(base_dir, icon_name)
@@ -1434,6 +1439,12 @@ def on_start(bot, _args):
     accounts = bot.rpc.get_all_account_ids()
     if accounts:
         dc_accid = accounts[0]
+        try:
+            bot.rpc.set_config(dc_accid, "download_limit", "1")
+            bot.rpc.set_config(dc_accid, "delete_device_after", "3600")
+            bot.logger.info("Successfully set auto-download limit to 1 byte and delete_device_after to 1 hour to optimize storage.")
+        except Exception as e:
+            bot.logger.error(f"Failed to set storage optimization settings in on_start: {e}")
         
         # Show configured admin and transports
         admin_email = database.get_config("admin_dc_email")
