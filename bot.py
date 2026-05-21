@@ -1217,7 +1217,7 @@ def on_new_message(bot, accid, event):
             greeted_key = f"greeted_{msg.from_id}"
             if not database.get_config(greeted_key):
                 help_text = _get_help_text(bot, accid, msg.from_id)
-                _send(bot, accid, msg.chat_id, f"👋 Welcome to YT Bot!\n\n{help_text}")
+                _send(bot, accid, msg.chat_id, help_text)
                 database.set_config(greeted_key, "1")
     except Exception as e:
         logger.error(f"Greeting check error: {e}")

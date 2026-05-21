@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1] - 2026-05-22
+
+### Changed
+- Standardized the welcome greeting to return the exact same detailed output as the `/help` command instead of a custom welcome prefix message.
+
 ## [1.5.0] - 2026-05-19
 
 ### Added
