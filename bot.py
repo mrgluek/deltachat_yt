@@ -1214,10 +1214,11 @@ def on_new_message(bot, accid, event):
             is_private = (getattr(chat_info, "type", 1) == 1)
 
         if is_private:
-            if not bot.rpc.get_contact_config(accid, msg.from_id, "greeted"):
+            greeted_key = f"greeted_{msg.from_id}"
+            if not database.get_config(greeted_key):
                 help_text = _get_help_text(bot, accid, msg.from_id)
                 _send(bot, accid, msg.chat_id, f"👋 Welcome to YT Bot!\n\n{help_text}")
-                bot.rpc.set_contact_config(accid, msg.from_id, "greeted", "1")
+                database.set_config(greeted_key, "1")
     except Exception as e:
         logger.error(f"Greeting check error: {e}")
 
