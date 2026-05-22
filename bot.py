@@ -845,7 +845,30 @@ def _handle_download_command(bot, accid, event, download_type: str, payload: str
     if _is_duplicate_msg(msg.id, "cmd"):
         return
         
-    video_id = _extract_video_id(payload)
+    video_id = None
+    
+    # 1. Try to extract from stripped payload (removing /yt or /ytm command prefix)
+    cmd_prefix = "/ytm" if download_type == "audio" else "/yt"
+    stripped_payload = payload
+    if payload.startswith(cmd_prefix):
+        stripped_payload = payload[len(cmd_prefix):].strip()
+        
+    if stripped_payload:
+        video_id = _extract_video_id(stripped_payload)
+        
+    # 2. Check quote reply if no video ID was found in the direct payload
+    if not video_id:
+        quote = getattr(msg, "quote", None) or (msg.get("quote") if isinstance(msg, dict) else None)
+        if quote:
+            quoted_text = ""
+            if isinstance(quote, dict):
+                quoted_text = quote.get("text", "")
+            else:
+                quoted_text = getattr(quote, "text", "")
+                
+            if quoted_text:
+                video_id = _extract_video_id(quoted_text)
+
     if not video_id:
         _send(bot, accid, msg.chat_id,
               f"Usage: /{download_type == 'video' and 'yt' or 'ytm'} <youtube_url_or_video_id>")
