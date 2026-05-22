@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.2] - 2026-05-22
+
+### Fixed
+- **Command Underscore Separator Stripping:** Fixed a bug in `/yt` and `/ytm` where clicking a generated dynamic link like `/yt_lgW2xTos3hQ` would leave a leading underscore in the extracted video ID, causing yt-dlp to fail with a "Video unavailable" error.
+
 ## [1.5.1] - 2026-05-22
 
 ### Changed

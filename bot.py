@@ -851,7 +851,10 @@ def _handle_download_command(bot, accid, event, download_type: str, payload: str
     cmd_prefix = "/ytm" if download_type == "audio" else "/yt"
     stripped_payload = payload
     if payload.startswith(cmd_prefix):
-        stripped_payload = payload[len(cmd_prefix):].strip()
+        stripped_payload = payload[len(cmd_prefix):]
+        if stripped_payload.startswith("_"):
+            stripped_payload = stripped_payload[1:]
+        stripped_payload = stripped_payload.strip()
         
     if stripped_payload:
         video_id = _extract_video_id(stripped_payload)
