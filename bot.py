@@ -1352,8 +1352,12 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
 
     lines = [
         f"📺 Video: \"{title}\" ({dur_str})",
+        "",
         f"🔗 {video_url}",
-        f"{video_btn}   {audio_btn}"
+        "",
+        f"{video_btn}",
+        "",
+        f"{audio_btn}"
     ]
 
     _send(bot, accid, msg.chat_id, "\n".join(lines), file=thumb_path)
