@@ -1336,8 +1336,6 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
     can_video = duration <= MAX_DURATION_VIDEO
     can_audio = duration <= MAX_DURATION_AUDIO
 
-    lines = [f"📺 Video: \"{title}\" ({dur_str})", ""]
-    
     if video_id.startswith("http://") or video_id.startswith("https://"):
         short_id = _get_cache_id(video_id)
         database.add_url_mapping(short_id, video_id)
@@ -1347,15 +1345,16 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
         vid_cmd = f"/yt_{video_id}"
         aud_cmd = f"/ytm_{video_id}"
     
-    if can_video:
-        lines.append(f"Download video {target_height}p ({video_size_str}): {vid_cmd}")
-    else:
-        lines.append(f"⚠️ Video too long (> {MAX_DURATION_VIDEO // 60}m)")
-        
-    if can_audio:
-        lines.append(f"Download audio {audio_fmt} ({audio_size_str}): {aud_cmd}")
-    else:
-        lines.append(f"⚠️ Audio too long (> {MAX_DURATION_AUDIO // 60}m)")
+    video_url = _make_yt_url(video_id)
+
+    video_btn = f"[ 📼 {target_height}p ({video_size_str}) {vid_cmd} ]" if can_video else f"[ 📼 Too long (> {MAX_DURATION_VIDEO // 60}m) ]"
+    audio_btn = f"[ 💿 {audio_fmt} ({audio_size_str}) {aud_cmd} ]" if can_audio else f"[ 💿 Too long (> {MAX_DURATION_AUDIO // 60}m) ]"
+
+    lines = [
+        f"📺 Video: \"{title}\" ({dur_str})",
+        f"🔗 {video_url}",
+        f"{video_btn}   {audio_btn}"
+    ]
 
     _send(bot, accid, msg.chat_id, "\n".join(lines), file=thumb_path)
 
