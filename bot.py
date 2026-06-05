@@ -1037,16 +1037,25 @@ def resilient_command(bot, accid, event):
         _send(bot, accid, msg.chat_id, "❌ Only the bot administrator can use /resilient.")
         return
 
+    arg = event.payload.strip().lower() if event.payload else ""
+
     try:
-        current = database.get_config("resilient")
-        if current == "1":
+        current = database.get_config("resilient") == "1"
+        if not arg:
+            status = "enabled" if current else "disabled"
+            _send(bot, accid, msg.chat_id, f"ℹ️ Resilient sending mode is currently {status}.")
+            return
+
+        if arg in ("on", "1", "true"):
+            database.set_config("resilient", "1")
+            _send(bot, accid, msg.chat_id, "✅ Resilient sending mode enabled. Each outgoing message will be sent via all connected transports.")
+        elif arg in ("off", "0", "false"):
             database.set_config("resilient", "0")
             _send(bot, accid, msg.chat_id, "❌ Resilient sending mode disabled.")
         else:
-            database.set_config("resilient", "1")
-            _send(bot, accid, msg.chat_id, "✅ Resilient sending mode enabled. Each outgoing message will be sent via all connected transports.")
+            _send(bot, accid, msg.chat_id, "❌ Invalid argument. Use '/resilient on', '/resilient off', or '/resilient' to get status.")
     except Exception as e:
-        _send(bot, accid, msg.chat_id, f"❌ Failed to toggle resilient mode: {e}")
+        _send(bot, accid, msg.chat_id, f"❌ Failed to update resilient mode: {e}")
 
 @dc_cli.on(events.NewMessage(command="/rmtransport"))
 def rmtransport_command(bot, accid, event):
