@@ -7,7 +7,6 @@ ENV DENO_INSTALL=/root/.deno
 ENV PATH=$DENO_INSTALL/bin:$PATH
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY bin/deltachat-rpc-server /usr/local/bin/deltachat-rpc-server
 COPY . .
 ENV DC_DB_DIR=/app/data
 ENV DB_PATH=/app/data/ytbot.db
