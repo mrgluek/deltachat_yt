@@ -14,6 +14,7 @@ services:
     environment:
       - DC_DB_DIR=/app/data
       - DB_PATH=/app/data/ytbot.db
+      - ALLOWED_BOT_EMAILS=${ALLOWED_BOT_EMAILS:-}
     deploy:
       resources:
         limits:
