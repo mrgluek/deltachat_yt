@@ -887,14 +887,14 @@ def _handle_download_command(bot, accid, event, download_type: str, payload: str
 
 # ── Delta Chat command handlers ──
 
-@dc_cli.on(events.NewMessage(command="/yt"))
+@dc_cli.on(events.NewMessage(command="/yt", is_bot=None))
 def yt_command(bot, accid, event):
     if accid != dc_accid:
         return
     _handle_download_command(bot, accid, event, "video", event.msg.text)
 
 
-@dc_cli.on(events.NewMessage(command="/ytm"))
+@dc_cli.on(events.NewMessage(command="/ytm", is_bot=None))
 def ytm_command(bot, accid, event):
     if accid != dc_accid:
         return
@@ -1207,7 +1207,7 @@ def _get_help_text(bot, accid, from_id):
 
 # ── YouTube link auto-detection and /yt_ID, /ytm_ID handlers ──
 
-@dc_cli.on(events.NewMessage)
+@dc_cli.on(events.NewMessage(is_bot=None))
 def on_new_message(bot, accid, event):
     msg = event.msg
     
