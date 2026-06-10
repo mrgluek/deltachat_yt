@@ -126,6 +126,72 @@ SUPPORTED_URL_RE = re.compile(
     r')[^\s]+'
 )
 
+YANDEX_PREVIEW_RE = re.compile(
+    r'https?://(?:www\.)?yandex\.(?:ru|by|kz|com|ua)/video/preview/\d+'
+)
+
+def _unescape_json_string(s: str) -> str:
+    r"""Safely unescape JSON string values (like \/ and unicode escapes)."""
+    try:
+        return json.loads(f'"{s}"')
+    except Exception:
+        return s.replace('\\/', '/').replace('\\"', '"')
+
+
+def _resolve_yandex_preview(yandex_url: str) -> str | None:
+    """Resolve Yandex video preview URL to the original video URL."""
+    t_param = None
+    try:
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+        parsed_orig = urlparse(yandex_url)
+        q_params = parse_qs(parsed_orig.query)
+        if 't' in q_params:
+            t_param = q_params['t'][0]
+    except Exception:
+        pass
+
+    try:
+        req = urllib.request.Request(
+            yandex_url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            html = response.read().decode('utf-8', errors='replace')
+            
+        candidates = []
+        # 1. "videoUrl"
+        for m in re.findall(r'"videoUrl"\s*:\s*"([^"]+)"', html):
+            candidates.append(_unescape_json_string(m))
+        # 2. "embedUrl"
+        for m in re.findall(r'"embedUrl"\s*:\s*"([^"]+)"', html):
+            candidates.append(_unescape_json_string(m))
+        # 3. "host" -> "href"
+        for m in re.findall(r'"host"\s*:\s*\{[^}]*"href"\s*:\s*"([^"]+)"', html):
+            candidates.append(_unescape_json_string(m))
+
+        for candidate in candidates:
+            candidate = candidate.strip()
+            if YT_URL_RE.search(candidate) or SUPPORTED_URL_RE.search(candidate):
+                # Append timestamp parameter if it was in the original Yandex URL
+                if t_param:
+                    try:
+                        parsed_cand = urlparse(candidate)
+                        cand_query = parse_qs(parsed_cand.query)
+                        if 't' not in cand_query:
+                            cand_query['t'] = [t_param]
+                            new_query = urlencode(cand_query, doseq=True)
+                            candidate = urlunparse(parsed_cand._replace(query=new_query))
+                    except Exception:
+                        pass
+                logger.info(f"Resolved Yandex preview {yandex_url} to: {candidate}")
+                return candidate
+    except Exception as e:
+        logger.error(f"Error resolving Yandex preview URL {yandex_url}: {e}")
+    return None
+
+
 def _make_yt_url(video_id: str) -> str:
     if video_id.startswith("http://") or video_id.startswith("https://"):
         return video_id
@@ -719,6 +785,17 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     """Actual download + send logic."""
     chat_id = msg.chat_id
     req_msg_id = msg.id
+
+    # 0. Resolve Yandex preview URL if target is a Yandex preview link
+    if YANDEX_PREVIEW_RE.search(video_id):
+        resolved = _resolve_yandex_preview(video_id)
+        if resolved:
+            video_id = resolved
+        else:
+            _react(bot, accid, req_msg_id, "❌")
+            _send(bot, accid, chat_id, "❌ Could not extract video link from Yandex preview.")
+            return
+
     logger.info(f"Starting _do_download for {video_id} (type={download_type}) in chat {chat_id}")
     
     process_key = f"{chat_id}_{video_id}_{download_type}"
@@ -1262,6 +1339,16 @@ def _get_help_text(bot, accid, from_id):
 
 # ── YouTube link auto-detection and /yt_ID, /ytm_ID handlers ──
 
+def _handle_yandex_preview(bot, accid, msg, yandex_url: str):
+    """Resolve Yandex preview URL and pass to standard info handler."""
+    resolved = _resolve_yandex_preview(yandex_url)
+    if resolved:
+        _handle_link_info(bot, accid, msg, resolved)
+    else:
+        _react(bot, accid, msg.id, "❌")
+        _send(bot, accid, msg.chat_id, "❌ Could not extract video link from Yandex preview.")
+
+
 @dc_cli.on(events.NewMessage(is_bot=None))
 def on_new_message(bot, accid, event):
     if _is_bot_blocked(bot, accid, event.msg):
@@ -1303,6 +1390,15 @@ def on_new_message(bot, accid, event):
         video_id = yt_match.group(1)
         _react(bot, accid, msg.id, "🤖")
         t = threading.Thread(target=_handle_link_info, args=(bot, accid, msg, video_id), daemon=True)
+        t.start()
+        return
+
+    # 2.6. Auto-detect Yandex Video Preview links
+    yandex_match = YANDEX_PREVIEW_RE.search(text)
+    if yandex_match:
+        yandex_url = yandex_match.group(0)
+        _react(bot, accid, msg.id, "🤖")
+        t = threading.Thread(target=_handle_yandex_preview, args=(bot, accid, msg, yandex_url), daemon=True)
         t.start()
         return
 

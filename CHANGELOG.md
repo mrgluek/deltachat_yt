@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.1] - 2026-06-10
+
+### Added
+- **Yandex Video Preview Resolution:** Support for automatically resolving Yandex Video Preview links (`yandex.ru/video/preview/...`) to their underlying source video links (e.g. Rutube or YouTube) and downloading them, while keeping original query timestamp parameters (`?t=...`).
+
 ## [1.6.0] - 2026-06-05
 
 ### Added
