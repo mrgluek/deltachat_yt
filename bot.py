@@ -130,6 +130,10 @@ YANDEX_PREVIEW_RE = re.compile(
     r'https?://(?:www\.)?yandex\.(?:ru|by|kz|com|ua)/video/preview/\d+'
 )
 
+AUDIO_ONLY_URL_RE = re.compile(
+    r'https?://(?:www\.)?(?:soundcloud\.com|music\.yandex\.(?:ru|com|by|kz))/'
+)
+
 def _unescape_json_string(s: str) -> str:
     r"""Safely unescape JSON string values (like \/ and unicode escapes)."""
     try:
@@ -795,6 +799,10 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
             _react(bot, accid, req_msg_id, "❌")
             _send(bot, accid, chat_id, "❌ Could not extract video link from Yandex preview.")
             return
+
+    # 0.5. If it's an audio-only platform, force audio download type
+    if download_type == "video" and AUDIO_ONLY_URL_RE.search(video_id):
+        download_type = "audio"
 
     logger.info(f"Starting _do_download for {video_id} (type={download_type}) in chat {chat_id}")
     
@@ -1531,15 +1539,26 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
     video_btn = f"[ 📼 {target_height}p ({video_size_str}) {vid_cmd} ]" if can_video else f"[ 📼 Too long (> {MAX_DURATION_VIDEO // 60}m) ]"
     audio_btn = f"[ 💿 {audio_fmt} ({audio_size_str}) {aud_cmd} ]" if can_audio else f"[ 💿 Too long (> {MAX_DURATION_AUDIO // 60}m) ]"
 
-    lines = [
-        f"📺 Video: \"{title}\" ({dur_str})",
-        "",
-        f"🔗 {video_url}",
-        "",
-        f"{video_btn}",
-        "",
-        f"{audio_btn}"
-    ]
+    is_audio_only = bool(AUDIO_ONLY_URL_RE.search(video_url))
+
+    if is_audio_only:
+        lines = [
+            f"🎵 Audio: \"{title}\" ({dur_str})",
+            "",
+            f"🔗 {video_url}",
+            "",
+            f"{audio_btn}"
+        ]
+    else:
+        lines = [
+            f"📺 Video: \"{title}\" ({dur_str})",
+            "",
+            f"🔗 {video_url}",
+            "",
+            f"{video_btn}",
+            "",
+            f"{audio_btn}"
+        ]
 
     _send(bot, accid, msg.chat_id, "\n".join(lines), file=thumb_path)
 
