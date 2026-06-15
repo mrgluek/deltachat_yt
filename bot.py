@@ -615,7 +615,10 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "--no-playlist",
         "--match-filter", f"duration<={max_duration}",
         "-f", f"b[ext=mp4][height<={max_height}]/bv[ext=mp4][height<={max_height}]+ba[ext=m4a]/b[height<={max_height}]/b",
-        "--max-filesize", "30M",
+    ]
+    if not start_time:
+        cmd.extend(["--max-filesize", "30M"])
+    cmd.extend([
         "--merge-output-format", "mp4",
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
@@ -626,7 +629,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "--add-header", "Accept-Language: en-US,en;q=0.9",
         "--print-json",
         "-o", out_template,
-    ]
+    ])
     
     if PROXY:
         cmd.extend(["--proxy", PROXY])
@@ -635,8 +638,6 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
     if os.path.exists(cookies_path):
         cmd.extend(["--cookies", cookies_path])
         
-    if start_time:
-        cmd.extend(["--download-sections", f"*{start_time}-inf"])
     cmd.append(_make_yt_url(video_id))
     
     try:
@@ -682,10 +683,33 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
                     search_prefix = m.group(1) if m else None
                 filepath = _find_file_in_dir(output_dir, ['.mp4', '.mkv', '.webm'], prefix=search_prefix)
         if filepath and os.path.exists(filepath):
+            if start_time:
+                trimmed_filepath = os.path.splitext(filepath)[0] + "_trimmed.mp4"
+                trim_cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", str(start_time),
+                    "-i", filepath,
+                    "-c", "copy",
+                    trimmed_filepath
+                ]
+                try:
+                    logger.info(f"Trimming video starting from {start_time}s locally using ffmpeg...")
+                    proc_trim = await asyncio.create_subprocess_exec(
+                        *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                    )
+                    await proc_trim.communicate()
+                    if proc_trim.returncode == 0 and os.path.exists(trimmed_filepath):
+                        os.remove(filepath)
+                        filepath = trimmed_filepath
+                    else:
+                        logger.error(f"ffmpeg video trim failed with code {proc_trim.returncode}")
+                except Exception as e:
+                    logger.error(f"Error during local ffmpeg video trim: {e}")
+
             size = os.path.getsize(filepath)
             if size > 30 * 1024 * 1024:
                 os.remove(filepath)
-                return None, info, "📦 Downloaded file exceeds 30 MB"
+                return None, info, "📦 Video exceeds 30 MB size limit"
             return filepath, info, None
         
         logger.error(f"Video file not found for {video_id}. Expected: {filepath}. Dir contents: {os.listdir(output_dir)}")
@@ -735,7 +759,6 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         "--audio-format", fmt,
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--extractor-args", "youtube:player_client=android,web",
         "--js-runtimes", "deno:/root/.deno/bin/deno",
         "--no-cache-dir",
         "--no-config",
@@ -753,8 +776,6 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
     if os.path.exists(cookies_path):
         cmd.extend(["--cookies", cookies_path])
         
-    if start_time:
-        cmd.extend(["--download-sections", f"*{start_time}-inf"])
     cmd.append(_make_yt_url(video_id))
     
     try:
@@ -790,6 +811,30 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 filepath = _find_file_in_dir(output_dir, ['.opus', '.mp3', '.m4a', '.webm'], prefix=safe_id)
 
         if filepath and os.path.exists(filepath):
+            if start_time:
+                ext = os.path.splitext(filepath)[1]
+                trimmed_filepath = os.path.splitext(filepath)[0] + f"_trimmed{ext}"
+                trim_cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", str(start_time),
+                    "-i", filepath,
+                    "-c", "copy",
+                    trimmed_filepath
+                ]
+                try:
+                    logger.info(f"Trimming audio starting from {start_time}s locally using ffmpeg...")
+                    proc_trim = await asyncio.create_subprocess_exec(
+                        *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                    )
+                    await proc_trim.communicate()
+                    if proc_trim.returncode == 0 and os.path.exists(trimmed_filepath):
+                        os.remove(filepath)
+                        filepath = trimmed_filepath
+                    else:
+                        logger.error(f"ffmpeg audio trim failed with code {proc_trim.returncode}")
+                except Exception as e:
+                    logger.error(f"Error during local ffmpeg audio trim: {e}")
+
             size = os.path.getsize(filepath)
             if size > 30 * 1024 * 1024:
                 os.remove(filepath)
@@ -938,6 +983,12 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
                 tmpdir = tempfile.mkdtemp(prefix="ytbot_")
                 try:
                     start_time = _parse_time_param(video_id)
+                    if start_time and start_time > 7200:
+                        _react(bot, accid, req_msg_id, "❌")
+                        _send(bot, accid, chat_id, "❌ Start time parameter is too large (maximum is 2 hours)")
+                        shutil.rmtree(tmpdir, ignore_errors=True)
+                        return
+
                     effective_duration = max(0, duration - start_time) if start_time else duration
                     if download_type == "video":
                         initial_height = 360 if effective_duration > 600 else 480
