@@ -142,32 +142,70 @@ def _unescape_json_string(s: str) -> str:
         return s.replace('\\/', '/').replace('\\"', '"')
 
 
-def _parse_time_param(url: str) -> int | None:
-    """Parse start time from URL parameters (e.g. t=51, t=1m20s, start=10)."""
+def _parse_time_param(url: str) -> tuple[int | None, int | None]:
+    """Parse start and end times from URL parameters (e.g. t=51, t=51-70, start=10, end=20)."""
     try:
         from urllib.parse import urlparse, parse_qs
         parsed = urlparse(url)
         q_params = parse_qs(parsed.query)
-        t_val = q_params.get('t', q_params.get('start'))
-        if not t_val:
-            return None
         
-        val = t_val[0]
-        if val.isdigit():
-            return int(val)
+        start_time = None
+        end_time = None
+        
+        # 1. Check start and end parameters
+        start_val = q_params.get('start')
+        end_val = q_params.get('end')
+        
+        if start_val:
+            start_time = _parse_single_time_str(start_val[0])
+        if end_val:
+            end_time = _parse_single_time_str(end_val[0])
             
-        total_seconds = 0
-        pattern = re.compile(r'(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?')
-        match = pattern.match(val)
-        if match:
-            h, m, s = match.groups()
-            if h: total_seconds += int(h) * 3600
-            if m: total_seconds += int(m) * 60
-            if s: total_seconds += int(s)
-            return total_seconds
+        # 2. Check t parameter
+        t_val = q_params.get('t')
+        if t_val:
+            val = t_val[0]
+            # Try to split by range separator (- or ,)
+            parts = re.split(r'[-–—,]', val)
+            if len(parts) >= 2:
+                s_parsed = _parse_single_time_str(parts[0])
+                e_parsed = _parse_single_time_str(parts[1])
+                if s_parsed is not None:
+                    start_time = s_parsed
+                if e_parsed is not None:
+                    end_time = e_parsed
+            else:
+                s_parsed = _parse_single_time_str(val)
+                if s_parsed is not None:
+                    start_time = s_parsed
+                    
+        return start_time, end_time
     except Exception:
         pass
+    return None, None
+
+
+def _parse_single_time_str(val: str) -> int | None:
+    """Parse a single time string like '51', '51s', '1m20s', '1h2m3s' into seconds."""
+    val = val.strip().lower()
+    if not val:
+        return None
+    if val.isdigit():
+        return int(val)
+    if val.endswith('s') and val[:-1].isdigit():
+        return int(val[:-1])
+        
+    total_seconds = 0
+    pattern = re.compile(r'(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?')
+    match = pattern.match(val)
+    if match:
+        h, m, s = match.groups()
+        if h: total_seconds += int(h) * 3600
+        if m: total_seconds += int(m) * 60
+        if s: total_seconds += int(s)
+        return total_seconds
     return None
+
 
 
 def _resolve_yandex_preview(yandex_url: str) -> str | None:
@@ -604,11 +642,13 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
         return None, str(e)
 
 
-async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None) -> tuple[str | None, dict | None, str | None]:
+async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None, end_time: int = None) -> tuple[str | None, dict | None, str | None]:
     """Download video. Returns (filepath, info_dict, error_string)."""
     out_template = os.path.join(output_dir, "%(id)s_%(title).50s.%(ext)s")
     max_duration = MAX_DURATION_VIDEO
-    if start_time:
+    if end_time:
+        max_duration += end_time
+    elif start_time:
         max_duration += start_time
     cmd = [
         "yt-dlp",
@@ -616,7 +656,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "--match-filter", f"duration<={max_duration}",
         "-f", f"b[ext=mp4][height<={max_height}]/bv[ext=mp4][height<={max_height}]+ba[ext=m4a]/b[height<={max_height}]/b",
     ]
-    if not start_time:
+    if not start_time and not end_time:
         cmd.extend(["--max-filesize", "30M"])
     cmd.extend([
         "--merge-output-format", "mp4",
@@ -683,17 +723,23 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
                     search_prefix = m.group(1) if m else None
                 filepath = _find_file_in_dir(output_dir, ['.mp4', '.mkv', '.webm'], prefix=search_prefix)
         if filepath and os.path.exists(filepath):
-            if start_time:
+            if start_time or end_time:
                 trimmed_filepath = os.path.splitext(filepath)[0] + "_trimmed.mp4"
+                trim_duration = (end_time - (start_time or 0)) if end_time else None
                 trim_cmd = [
-                    "ffmpeg", "-y",
-                    "-ss", str(start_time),
-                    "-i", filepath,
+                    "ffmpeg", "-y"
+                ]
+                if start_time:
+                    trim_cmd.extend(["-ss", str(start_time)])
+                trim_cmd.extend(["-i", filepath])
+                if trim_duration is not None:
+                    trim_cmd.extend(["-t", str(trim_duration)])
+                trim_cmd.extend([
                     "-c", "copy",
                     trimmed_filepath
-                ]
+                ])
                 try:
-                    logger.info(f"Trimming video starting from {start_time}s locally using ffmpeg...")
+                    logger.info(f"Trimming video starting from {start_time or 0}s (duration: {trim_duration or 'inf'}s) locally using ffmpeg...")
                     proc_trim = await asyncio.create_subprocess_exec(
                         *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
                     )
@@ -726,9 +772,18 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         return None, None, f"Error: {e}"
 
 
-async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None) -> tuple[str | None, dict | None, str | None]:
+async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None, end_time: int = None) -> tuple[str | None, dict | None, str | None]:
     """Download audio. Returns (filepath, info_dict, error_string)."""
-    effective_duration = max(0, duration - start_time) if start_time else duration
+    if start_time:
+        if end_time:
+            effective_duration = max(0, end_time - start_time)
+        else:
+            effective_duration = max(0, duration - start_time)
+    elif end_time:
+        effective_duration = max(0, end_time)
+    else:
+        effective_duration = duration
+
     if effective_duration <= 600:
         # Keep original format, preferring opus (for YouTube), then m4a (AAC) to avoid transcoding
         fmt = "best"
@@ -744,7 +799,9 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
     out_template = os.path.join(output_dir, f"{safe_id}.%(ext)s")
     
     max_duration = MAX_DURATION_AUDIO
-    if start_time:
+    if end_time:
+        max_duration += end_time
+    elif start_time:
         max_duration += start_time
     cmd = [
         "yt-dlp",
@@ -811,18 +868,24 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 filepath = _find_file_in_dir(output_dir, ['.opus', '.mp3', '.m4a', '.webm'], prefix=safe_id)
 
         if filepath and os.path.exists(filepath):
-            if start_time:
+            if start_time or end_time:
                 ext = os.path.splitext(filepath)[1]
                 trimmed_filepath = os.path.splitext(filepath)[0] + f"_trimmed{ext}"
+                trim_duration = (end_time - (start_time or 0)) if end_time else None
                 trim_cmd = [
-                    "ffmpeg", "-y",
-                    "-ss", str(start_time),
-                    "-i", filepath,
+                    "ffmpeg", "-y"
+                ]
+                if start_time:
+                    trim_cmd.extend(["-ss", str(start_time)])
+                trim_cmd.extend(["-i", filepath])
+                if trim_duration is not None:
+                    trim_cmd.extend(["-t", str(trim_duration)])
+                trim_cmd.extend([
                     "-c", "copy",
                     trimmed_filepath
-                ]
+                ])
                 try:
-                    logger.info(f"Trimming audio starting from {start_time}s locally using ffmpeg...")
+                    logger.info(f"Trimming audio starting from {start_time or 0}s (duration: {trim_duration or 'inf'}s) locally using ffmpeg...")
                     proc_trim = await asyncio.create_subprocess_exec(
                         *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
                     )
@@ -982,22 +1045,41 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
             for attempt in range(2):
                 tmpdir = tempfile.mkdtemp(prefix="ytbot_")
                 try:
-                    start_time = _parse_time_param(video_id)
+                    start_time, end_time = _parse_time_param(video_id)
                     if start_time and start_time > 7200:
                         _react(bot, accid, req_msg_id, "❌")
                         _send(bot, accid, chat_id, "❌ Start time parameter is too large (maximum is 2 hours)")
                         shutil.rmtree(tmpdir, ignore_errors=True)
                         return
+                    if end_time and end_time > 7200:
+                        _react(bot, accid, req_msg_id, "❌")
+                        _send(bot, accid, chat_id, "❌ End time parameter is too large (maximum is 2 hours)")
+                        shutil.rmtree(tmpdir, ignore_errors=True)
+                        return
+                    if start_time and end_time and end_time <= start_time:
+                        _react(bot, accid, req_msg_id, "❌")
+                        _send(bot, accid, chat_id, "❌ End time must be after start time")
+                        shutil.rmtree(tmpdir, ignore_errors=True)
+                        return
 
-                    effective_duration = max(0, duration - start_time) if start_time else duration
+                    if start_time:
+                        if end_time:
+                            effective_duration = max(0, end_time - start_time)
+                        else:
+                            effective_duration = max(0, duration - start_time)
+                    elif end_time:
+                        effective_duration = max(0, end_time)
+                    else:
+                        effective_duration = duration
+
                     if download_type == "video":
                         initial_height = 360 if effective_duration > 600 else 480
-                        filepath, info, error = await _download_video(video_id, tmpdir, max_height=initial_height, start_time=start_time)
+                        filepath, info, error = await _download_video(video_id, tmpdir, max_height=initial_height, start_time=start_time, end_time=end_time)
                         if initial_height == 480 and error and ("30 MB" in error or "filtered" in error.lower()):
                             logger.info(f"Retrying {video_id} with 360p because of size/filter...")
-                            filepath, info, error = await _download_video(video_id, tmpdir, max_height=360, start_time=start_time)
+                            filepath, info, error = await _download_video(video_id, tmpdir, max_height=360, start_time=start_time, end_time=end_time)
                     else:
-                        filepath, info, error = await _download_audio(video_id, tmpdir, duration, start_time=start_time)
+                        filepath, info, error = await _download_audio(video_id, tmpdir, duration, start_time=start_time, end_time=end_time)
     
                     if error:
                         last_error = error
@@ -1046,9 +1128,15 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
 
     title = (info or {}).get("title", video_id)
     duration = (info or {}).get("duration", 0)
-    start_time = _parse_time_param(video_id)
-    if start_time and duration:
-        duration = max(0, duration - start_time)
+    start_time, end_time = _parse_time_param(video_id)
+    if duration:
+        if start_time:
+            if end_time:
+                duration = max(0, end_time - start_time)
+            else:
+                duration = max(0, duration - start_time)
+        elif end_time:
+            duration = max(0, end_time)
     filesize = os.path.getsize(filepath)
     dur_str = _format_duration(int(duration)) if duration else "?"
     size_str = _format_size(filesize)
@@ -1621,9 +1709,15 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
     title = info.get("title", "Unknown")
     original_duration = info.get("duration", 0)
     duration = original_duration
-    start_time = _parse_time_param(video_id)
-    if start_time and duration:
-        duration = max(0, duration - start_time)
+    start_time, end_time = _parse_time_param(video_id)
+    if duration:
+        if start_time:
+            if end_time:
+                duration = max(0, end_time - start_time)
+            else:
+                duration = max(0, duration - start_time)
+        elif end_time:
+            duration = max(0, end_time)
         
     dur_str = _format_duration(int(duration)) if duration else "?"
 
