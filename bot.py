@@ -459,9 +459,19 @@ def _get_cache_id(video_id: str) -> str:
         return hashlib.md5(video_id.encode()).hexdigest()[:16]
     return video_id
 
-def _get_cache_path(video_id: str, download_type: str) -> str:
-    ext = "mp4" if download_type == "video" else "opus"
-    return os.path.join(CACHE_DIR, f"{_get_cache_id(video_id)}.{ext}")
+def _find_cached_file(video_id: str, download_type: str) -> str | None:
+    """Find the cached file path if it exists, checking for different extensions."""
+    cache_id = _get_cache_id(video_id)
+    if download_type == "video":
+        path = os.path.join(CACHE_DIR, f"{cache_id}.mp4")
+        if os.path.exists(path):
+            return path
+    else:
+        for ext in [".opus", ".m4a", ".mp3", ".ogg"]:
+            path = os.path.join(CACHE_DIR, f"{cache_id}{ext}")
+            if os.path.exists(path):
+                return path
+    return None
 
 
 # ── yt-dlp wrappers ──
@@ -653,13 +663,15 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
 
 async def _download_audio(video_id: str, output_dir: str, duration: int) -> tuple[str | None, dict | None, str | None]:
     """Download audio. Returns (filepath, info_dict, error_string)."""
-    fmt = "opus"
     if duration <= 600:
-        # For short audio, use the original downloaded quality. 
-        # yt-dlp will just extract the opus stream without re-encoding, saving CPU.
+        # Keep original format, preferring m4a (AAC) over others to avoid transcoding
+        fmt = "best"
+        format_selector = "ba[ext=m4a]/ba"
         pp_args = []
     else:
-        # For long podcasts, compress to 64k mono to save bandwidth
+        # For long audio (> 10 min), transcode and compress to Opus 64k mono to stay under 30MB limit
+        fmt = "opus"
+        format_selector = None
         pp_args = ["--postprocessor-args", "ffmpeg:-ac 1 -ar 24000 -b:a 64k"]
 
     safe_id = _get_cache_id(video_id)
@@ -668,9 +680,13 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
         "yt-dlp",
         "--no-playlist",
         "--match-filter", f"duration<={MAX_DURATION_AUDIO}",
+    ]
+    if format_selector:
+        cmd.extend(["-f", format_selector])
+
+    cmd.extend([
         "-x",
         "--audio-format", fmt,
-    ] + pp_args + [
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
         "--extractor-args", "youtube:player_client=android,web",
@@ -680,7 +696,9 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
         "--add-header", "Accept-Language: en-US,en;q=0.9",
         "--print-json",
         "-o", out_template,
-    ]
+    ])
+    if pp_args:
+        cmd.extend(pp_args)
     
     if PROXY:
         cmd.extend(["--proxy", PROXY])
@@ -832,8 +850,8 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
             return
     
         # 2. Check cache first
-        cache_path = _get_cache_path(video_id, download_type)
-        if os.path.exists(cache_path):
+        cache_path = _find_cached_file(video_id, download_type)
+        if cache_path:
             os.utime(cache_path, None)
             await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path)
             return
@@ -849,8 +867,8 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     
         # 4. Wait for lock if already downloading same ID
         with get_download_lock(video_id + download_type):
-            cache_path = _get_cache_path(video_id, download_type)
-            if os.path.exists(cache_path):
+            cache_path = _find_cached_file(video_id, download_type)
+            if cache_path:
                 # Re-check anti-spam inside the lock for the current chat
                 # This prevents duplicate sends if the user double-tapped the download link
                 last_sent_after_lock = database.get_last_download(chat_id, video_id, download_type)
@@ -897,6 +915,8 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
                         return
     
                     os.makedirs(CACHE_DIR, exist_ok=True)
+                    actual_ext = os.path.splitext(filepath)[1].lower()
+                    cache_path = os.path.join(CACHE_DIR, f"{_get_cache_id(video_id)}{actual_ext}")
                     shutil.move(filepath, cache_path)
                     
                     await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
@@ -1501,9 +1521,63 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
     video_size_str = "?? MB"
     audio_size_str = "?? MB"
     if duration:
-        # Audio estimation: Opus 128k for short, 64k for long
-        bitrate = 128 if duration <= 600 else 64
-        audio_mb = (duration * bitrate) / 8192
+        # Audio format and size estimation
+        if duration <= 600:
+            # We prefer m4a (AAC) if available, otherwise check first available format extension
+            audio_fmt = "M4A" # Default preference
+            # Let's verify if there is any m4a stream or if the only streams are mp3
+            has_m4a = False
+            has_mp3 = False
+            for f in info.get('formats', []):
+                ext = f.get('ext') or ''
+                if 'm4a' in ext or 'aac' in ext:
+                    has_m4a = True
+                elif 'mp3' in ext:
+                    has_mp3 = True
+            
+            if not has_m4a and has_mp3:
+                audio_fmt = "MP3"
+            elif not has_m4a and not has_mp3:
+                # If no m4a/mp3 is found, check if there is an opus stream
+                has_opus = False
+                for f in info.get('formats', []):
+                    acodec = f.get('acodec') or ''
+                    if 'opus' in acodec:
+                        has_opus = True
+                if has_opus:
+                    audio_fmt = "Opus"
+                else:
+                    audio_fmt = "Audio"
+
+            # Look for the format we will download: best m4a, otherwise best audio
+            best_m4a_f = None
+            best_any_f = None
+            for f in info.get('formats', []):
+                if f.get('vcodec') == 'none':
+                    ext = f.get('ext') or ''
+                    abr = f.get('abr') or 128
+                    
+                    if 'm4a' in ext or 'aac' in ext:
+                        if not best_m4a_f or abr > (best_m4a_f.get('abr') or 0):
+                            best_m4a_f = f
+                    if not best_any_f or abr > (best_any_f.get('abr') or 0):
+                        best_any_f = f
+            
+            target_f = best_m4a_f or best_any_f
+            if target_f:
+                fs = target_f.get('filesize') or target_f.get('filesize_approx')
+                if fs:
+                    audio_mb = fs / 1048576
+                else:
+                    abr = target_f.get('abr') or 128
+                    audio_mb = (duration * abr) / 8192
+            else:
+                audio_mb = (duration * 128) / 8192
+        else:
+            # For > 10m, we transcode to Opus 64k mono
+            audio_fmt = "Opus"
+            audio_mb = (duration * 64) / 8192
+            
         audio_size_str = f"~{audio_mb:.1f} MB"
         
         # Video estimation
