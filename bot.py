@@ -676,7 +676,11 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
                         filepath = candidate
                         break
             if not filepath or not os.path.exists(filepath):
-                filepath = _find_file_in_dir(output_dir, ['.mp4', '.mkv', '.webm'], prefix=video_id)
+                search_prefix = video_id
+                if video_id.startswith("http://") or video_id.startswith("https://"):
+                    m = YT_URL_RE.search(video_id)
+                    search_prefix = m.group(1) if m else None
+                filepath = _find_file_in_dir(output_dir, ['.mp4', '.mkv', '.webm'], prefix=search_prefix)
         if filepath and os.path.exists(filepath):
             size = os.path.getsize(filepath)
             if size > 30 * 1024 * 1024:
