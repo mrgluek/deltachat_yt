@@ -645,11 +645,10 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
 async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None, end_time: int = None) -> tuple[str | None, dict | None, str | None]:
     """Download video. Returns (filepath, info_dict, error_string)."""
     out_template = os.path.join(output_dir, "%(id)s_%(title).50s.%(ext)s")
-    max_duration = MAX_DURATION_VIDEO
-    if end_time:
-        max_duration += end_time
-    elif start_time:
-        max_duration += start_time
+    if start_time or end_time:
+        max_duration = 7200  # Allow up to 2 hours if trimming is requested
+    else:
+        max_duration = MAX_DURATION_VIDEO
     cmd = [
         "yt-dlp",
         "--no-playlist",
@@ -798,11 +797,10 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
     safe_id = _get_cache_id(video_id)
     out_template = os.path.join(output_dir, f"{safe_id}.%(ext)s")
     
-    max_duration = MAX_DURATION_AUDIO
-    if end_time:
-        max_duration += end_time
-    elif start_time:
-        max_duration += start_time
+    if start_time or end_time:
+        max_duration = 7200  # Allow up to 2 hours if trimming is requested
+    else:
+        max_duration = MAX_DURATION_AUDIO
     cmd = [
         "yt-dlp",
         "--no-playlist",
