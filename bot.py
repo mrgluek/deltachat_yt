@@ -142,6 +142,34 @@ def _unescape_json_string(s: str) -> str:
         return s.replace('\\/', '/').replace('\\"', '"')
 
 
+def _parse_time_param(url: str) -> int | None:
+    """Parse start time from URL parameters (e.g. t=51, t=1m20s, start=10)."""
+    try:
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(url)
+        q_params = parse_qs(parsed.query)
+        t_val = q_params.get('t', q_params.get('start'))
+        if not t_val:
+            return None
+        
+        val = t_val[0]
+        if val.isdigit():
+            return int(val)
+            
+        total_seconds = 0
+        pattern = re.compile(r'(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?')
+        match = pattern.match(val)
+        if match:
+            h, m, s = match.groups()
+            if h: total_seconds += int(h) * 3600
+            if m: total_seconds += int(m) * 60
+            if s: total_seconds += int(s)
+            return total_seconds
+    except Exception:
+        pass
+    return None
+
+
 def _resolve_yandex_preview(yandex_url: str) -> str | None:
     """Resolve Yandex video preview URL to the original video URL."""
     t_param = None
@@ -223,9 +251,13 @@ def _extract_video_id(text: str) -> str | None:
     if m_supported:
         return m_supported.group(0)
         
-    # 2. YouTube URL -> 11-char ID
+    # 2. YouTube URL -> 11-char ID (unless it has a time parameter)
     m_yt = YT_URL_RE.search(text)
     if m_yt:
+        if 't=' in text or 'start=' in text:
+            m_any_url = re.search(r'https?://[^\s]+', text)
+            if m_any_url:
+                return m_any_url.group(0)
         return m_yt.group(1)
         
     # 3. Direct YouTube 11-char ID or generic 11-16 char ID
@@ -572,13 +604,16 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
         return None, str(e)
 
 
-async def _download_video(video_id: str, output_dir: str, max_height: int = 480) -> tuple[str | None, dict | None, str | None]:
+async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None) -> tuple[str | None, dict | None, str | None]:
     """Download video. Returns (filepath, info_dict, error_string)."""
     out_template = os.path.join(output_dir, "%(id)s_%(title).50s.%(ext)s")
+    max_duration = MAX_DURATION_VIDEO
+    if start_time:
+        max_duration += start_time
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "--match-filter", f"duration<={MAX_DURATION_VIDEO}",
+        "--match-filter", f"duration<={max_duration}",
         "-f", f"b[ext=mp4][height<={max_height}]/bv[ext=mp4][height<={max_height}]+ba[ext=m4a]/b[height<={max_height}]/b",
         "--max-filesize", "30M",
         "--merge-output-format", "mp4",
@@ -600,6 +635,8 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
     if os.path.exists(cookies_path):
         cmd.extend(["--cookies", cookies_path])
         
+    if start_time:
+        cmd.extend(["--download-sections", f"*{start_time}-inf"])
     cmd.append(_make_yt_url(video_id))
     
     try:
@@ -661,9 +698,10 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
         return None, None, f"Error: {e}"
 
 
-async def _download_audio(video_id: str, output_dir: str, duration: int) -> tuple[str | None, dict | None, str | None]:
+async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None) -> tuple[str | None, dict | None, str | None]:
     """Download audio. Returns (filepath, info_dict, error_string)."""
-    if duration <= 600:
+    effective_duration = max(0, duration - start_time) if start_time else duration
+    if effective_duration <= 600:
         # Keep original format, preferring opus (for YouTube), then m4a (AAC) to avoid transcoding
         fmt = "best"
         format_selector = "ba[acodec=opus]/ba[ext=m4a]/ba"
@@ -676,10 +714,14 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
 
     safe_id = _get_cache_id(video_id)
     out_template = os.path.join(output_dir, f"{safe_id}.%(ext)s")
+    
+    max_duration = MAX_DURATION_AUDIO
+    if start_time:
+        max_duration += start_time
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "--match-filter", f"duration<={MAX_DURATION_AUDIO}",
+        "--match-filter", f"duration<={max_duration}",
     ]
     if format_selector:
         cmd.extend(["-f", format_selector])
@@ -707,6 +749,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int) -> tupl
     if os.path.exists(cookies_path):
         cmd.extend(["--cookies", cookies_path])
         
+    if start_time:
+        cmd.extend(["--download-sections", f"*{start_time}-inf"])
     cmd.append(_make_yt_url(video_id))
     
     try:
@@ -889,14 +933,16 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
             for attempt in range(2):
                 tmpdir = tempfile.mkdtemp(prefix="ytbot_")
                 try:
+                    start_time = _parse_time_param(video_id)
+                    effective_duration = max(0, duration - start_time) if start_time else duration
                     if download_type == "video":
-                        initial_height = 360 if duration > 600 else 480
-                        filepath, info, error = await _download_video(video_id, tmpdir, max_height=initial_height)
+                        initial_height = 360 if effective_duration > 600 else 480
+                        filepath, info, error = await _download_video(video_id, tmpdir, max_height=initial_height, start_time=start_time)
                         if initial_height == 480 and error and ("30 MB" in error or "filtered" in error.lower()):
                             logger.info(f"Retrying {video_id} with 360p because of size/filter...")
-                            filepath, info, error = await _download_video(video_id, tmpdir, max_height=360)
+                            filepath, info, error = await _download_video(video_id, tmpdir, max_height=360, start_time=start_time)
                     else:
-                        filepath, info, error = await _download_audio(video_id, tmpdir, duration)
+                        filepath, info, error = await _download_audio(video_id, tmpdir, duration, start_time=start_time)
     
                     if error:
                         last_error = error
@@ -945,6 +991,9 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
 
     title = (info or {}).get("title", video_id)
     duration = (info or {}).get("duration", 0)
+    start_time = _parse_time_param(video_id)
+    if start_time and duration:
+        duration = max(0, duration - start_time)
     filesize = os.path.getsize(filepath)
     dur_str = _format_duration(int(duration)) if duration else "?"
     size_str = _format_size(filesize)
@@ -1415,7 +1464,11 @@ def on_new_message(bot, accid, event):
     # 2. Auto-detect YouTube links and respond with info
     yt_match = YT_URL_RE.search(text)
     if yt_match:
-        video_id = yt_match.group(1)
+        if 't=' in text or 'start=' in text:
+            url_match = re.search(r'https?://[^\s]+', text)
+            video_id = url_match.group(0) if url_match else yt_match.group(0)
+        else:
+            video_id = yt_match.group(1)
         _react(bot, accid, msg.id, "🤖")
         t = threading.Thread(target=_handle_link_info, args=(bot, accid, msg, video_id), daemon=True)
         t.start()
@@ -1511,7 +1564,12 @@ def _handle_link_info(bot, accid, msg, video_id: str):
 def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: str | None):
     """Helper to format and send the link info message."""
     title = info.get("title", "Unknown")
-    duration = info.get("duration", 0)
+    original_duration = info.get("duration", 0)
+    duration = original_duration
+    start_time = _parse_time_param(video_id)
+    if start_time and duration:
+        duration = max(0, duration - start_time)
+        
     dur_str = _format_duration(int(duration)) if duration else "?"
 
     audio_fmt = "Opus"
@@ -1570,6 +1628,8 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
             if target_f:
                 fs = target_f.get('filesize') or target_f.get('filesize_approx')
                 if fs:
+                    if start_time and original_duration:
+                        fs = fs * (duration / original_duration)
                     audio_mb = fs / 1048576
                 else:
                     abr = target_f.get('abr') or 128
@@ -1589,6 +1649,8 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
             if f.get('height') == target_height and f.get('vcodec') != 'none':
                 fs = f.get('filesize') or f.get('filesize_approx')
                 if fs:
+                    if start_time and original_duration:
+                        fs = fs * (duration / original_duration)
                     video_mb = fs / 1048576
                     break
         

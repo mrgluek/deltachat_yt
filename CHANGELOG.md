@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.3] - 2026-06-15
+
+### Added
+- **Video/Audio Trimming by Timestamp:** Added support for automatically trimming downloads of video and audio tracks based on timestamp parameters (e.g. `?t=51`, `?t=1m20s`, or `&start=80`) present in YouTube (and resolved Yandex Video preview) URLs. The bot will seek and download only the specified range to save server bandwidth and keep files under the 30MB limit.
+- **Dynamic Size and Duration Estimation:** Updated the link preview/info box and message captions to calculate and display the remaining duration and scaled size of the trimmed media, rather than the full media length.
+
 ## [1.6.2] - 2026-06-15
 
 ### Added
