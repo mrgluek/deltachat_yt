@@ -2,11 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.6.1] - 2026-06-15
+## [1.6.2] - 2026-06-15
+
+### Added
+- **Audio-Only Platform Improvements:** Audio-only services (SoundCloud and Yandex Music) now present only the audio download option (`/ytm`), hiding the video button. Any explicit video download command (`/yt`) on these domains is automatically and gracefully routed to audio extraction.
+- **Native Audio Downloads (No Transcoding):** Audio tracks under 10 minutes are downloaded and saved in their original native formats without transcoding (preferring native `opus` for YouTube, native `m4a/aac` for SoundCloud and YouTube fallback, and native `mp3` for Yandex Music).
+
+## [1.6.1] - 2026-06-10
 
 ### Added
 - **Yandex Video Preview Resolution:** Support for automatically resolving Yandex Video Preview links (`yandex.ru/video/preview/...`) to their underlying source video links (e.g. Rutube or YouTube) and downloading them, while keeping original query timestamp parameters (`?t=...`).
-- **Audio-Only Platform Improvements:** Audio-only services (SoundCloud and Yandex Music) now present only the audio download option (`/ytm`), hiding the video button. Any explicit video download command (`/yt`) on these domains is automatically and gracefully routed to audio extraction.
 
 ## [1.6.0] - 2026-06-05
 

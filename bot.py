@@ -664,9 +664,9 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480)
 async def _download_audio(video_id: str, output_dir: str, duration: int) -> tuple[str | None, dict | None, str | None]:
     """Download audio. Returns (filepath, info_dict, error_string)."""
     if duration <= 600:
-        # Keep original format, preferring m4a (AAC) over others to avoid transcoding
+        # Keep original format, preferring opus (for YouTube), then m4a (AAC) to avoid transcoding
         fmt = "best"
-        format_selector = "ba[ext=m4a]/ba"
+        format_selector = "ba[acodec=opus]/ba[ext=m4a]/ba"
         pp_args = []
     else:
         # For long audio (> 10 min), transcode and compress to Opus 64k mono to stay under 30MB limit
@@ -1523,47 +1523,50 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
     if duration:
         # Audio format and size estimation
         if duration <= 600:
-            # We prefer m4a (AAC) if available, otherwise check first available format extension
-            audio_fmt = "M4A" # Default preference
-            # Let's verify if there is any m4a stream or if the only streams are mp3
+            # We prefer opus (for YouTube), then m4a (AAC) if available, otherwise check first available format extension
+            has_opus = False
             has_m4a = False
             has_mp3 = False
             for f in info.get('formats', []):
-                ext = f.get('ext') or ''
-                if 'm4a' in ext or 'aac' in ext:
-                    has_m4a = True
-                elif 'mp3' in ext:
-                    has_mp3 = True
-            
-            if not has_m4a and has_mp3:
-                audio_fmt = "MP3"
-            elif not has_m4a and not has_mp3:
-                # If no m4a/mp3 is found, check if there is an opus stream
-                has_opus = False
-                for f in info.get('formats', []):
+                if f.get('vcodec') == 'none':
                     acodec = f.get('acodec') or ''
+                    ext = f.get('ext') or ''
                     if 'opus' in acodec:
                         has_opus = True
-                if has_opus:
-                    audio_fmt = "Opus"
-                else:
-                    audio_fmt = "Audio"
+                    elif 'm4a' in ext or 'aac' in ext:
+                        has_m4a = True
+                    elif 'mp3' in ext:
+                        has_mp3 = True
+            
+            if has_opus:
+                audio_fmt = "Opus"
+            elif has_m4a:
+                audio_fmt = "M4A"
+            elif has_mp3:
+                audio_fmt = "MP3"
+            else:
+                audio_fmt = "Audio"
 
-            # Look for the format we will download: best m4a, otherwise best audio
+            # Look for the format we will download: best opus, best m4a, otherwise best audio
+            best_opus_f = None
             best_m4a_f = None
             best_any_f = None
             for f in info.get('formats', []):
                 if f.get('vcodec') == 'none':
+                    acodec = f.get('acodec') or ''
                     ext = f.get('ext') or ''
                     abr = f.get('abr') or 128
                     
-                    if 'm4a' in ext or 'aac' in ext:
+                    if 'opus' in acodec:
+                        if not best_opus_f or abr > (best_opus_f.get('abr') or 0):
+                            best_opus_f = f
+                    elif 'm4a' in ext or 'aac' in ext:
                         if not best_m4a_f or abr > (best_m4a_f.get('abr') or 0):
                             best_m4a_f = f
                     if not best_any_f or abr > (best_any_f.get('abr') or 0):
                         best_any_f = f
             
-            target_f = best_m4a_f or best_any_f
+            target_f = best_opus_f or best_m4a_f or best_any_f
             if target_f:
                 fs = target_f.get('filesize') or target_f.get('filesize_approx')
                 if fs:
