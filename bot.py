@@ -726,7 +726,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
                 trimmed_filepath = os.path.splitext(filepath)[0] + "_trimmed.mp4"
                 trim_duration = (end_time - (start_time or 0)) if end_time else None
                 trim_cmd = [
-                    "ffmpeg", "-y"
+                    "ffmpeg", "-y", "-nostdin"
                 ]
                 if start_time:
                     trim_cmd.extend(["-ss", str(start_time)])
@@ -740,7 +740,8 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
                 try:
                     logger.info(f"Trimming video starting from {start_time or 0}s (duration: {trim_duration or 'inf'}s) locally using ffmpeg...")
                     proc_trim = await asyncio.create_subprocess_exec(
-                        *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                        *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                        stdin=asyncio.subprocess.DEVNULL
                     )
                     await proc_trim.communicate()
                     if proc_trim.returncode == 0 and os.path.exists(trimmed_filepath):
@@ -871,7 +872,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 trimmed_filepath = os.path.splitext(filepath)[0] + f"_trimmed{ext}"
                 trim_duration = (end_time - (start_time or 0)) if end_time else None
                 trim_cmd = [
-                    "ffmpeg", "-y"
+                    "ffmpeg", "-y", "-nostdin"
                 ]
                 if start_time:
                     trim_cmd.extend(["-ss", str(start_time)])
@@ -885,7 +886,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 try:
                     logger.info(f"Trimming audio starting from {start_time or 0}s (duration: {trim_duration or 'inf'}s) locally using ffmpeg...")
                     proc_trim = await asyncio.create_subprocess_exec(
-                        *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                        *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                        stdin=asyncio.subprocess.DEVNULL
                     )
                     await proc_trim.communicate()
                     if proc_trim.returncode == 0 and os.path.exists(trimmed_filepath):
