@@ -7,6 +7,13 @@ All notable changes to this project will be documented in this file.
 ### Added
 - **Automatic Transport Failover:** Added a robust event-driven transport failover mechanism. The bot now listens to the core's `MSG_FAILED` event. When a message fails to deliver, it automatically rotates to the next configured backup transport, updates `configured_addr`, and schedules a resend of the message using exponential backoff (5s, 10s, 20s, 40s...) via an asynchronous timer thread. The failover process is limited to a maximum of 10 attempts per message to prevent infinite loops, and the administrator is alerted only on the first failure.
 
+### Fixed
+- **E2E Failover Loop & Key Fallback**:
+  - Added fallback support for both `chat_id` and `chatId` keys in message snapshots to prevent `chat 'Unknown' (ID: None)` errors.
+  - Downgraded permanent E2E and resend logs to `WARNING`.
+  - Blocked sending of admin failover alerts if the failed message itself was sent to the admin chat, preventing recursion.
+
+
 ## [1.6.3] - 2026-06-15
 
 ### Added
