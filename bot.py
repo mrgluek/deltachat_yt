@@ -1160,6 +1160,8 @@ def _handle_download_command(bot, accid, event, download_type: str, payload: str
     """Common handler for /yt and /ytm commands."""
     msg = event.msg
     
+    logger.info(f"Received download command /{download_type == 'video' and 'yt' or 'ytm'} (payload='{payload}') in chat {msg.chat_id} from {msg.from_id}")
+    
     if _is_duplicate_msg(msg.id, "cmd"):
         return
         
@@ -1226,6 +1228,7 @@ def ytm_command(bot, accid, event):
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
     msg = event.msg
+    logger.info(f"Received /help command in chat {msg.chat_id} from {msg.from_id}")
     help_text = _get_help_text(bot, accid, msg.from_id)
     _send(bot, accid, msg.chat_id, help_text)
 
@@ -1234,6 +1237,7 @@ def help_command(bot, accid, event):
 def transports_command(bot, accid, event):
     """Show configured transports (mail relays) and their status."""
     msg = event.msg
+    logger.info(f"Received /transports command in chat {msg.chat_id} from {msg.from_id}")
     if not _is_dc_admin(bot, accid, msg.from_id):
         _send(bot, accid, msg.chat_id, "❌ Only the bot administrator can use /transports.")
         return
@@ -1369,6 +1373,7 @@ def addtransport_command(bot, accid, event):
 def setprimary_command(bot, accid, event):
     """Set a specific transport as primary. Admin only."""
     msg = event.msg
+    logger.info(f"Received /setprimary command (payload='{event.payload}') in chat {msg.chat_id} from {msg.from_id}")
     if not _is_dc_admin(bot, accid, msg.from_id):
         _send(bot, accid, msg.chat_id, "❌ Only the bot administrator can use /setprimary.")
         return
@@ -1614,6 +1619,7 @@ def on_new_message(bot, accid, event):
             video_id = url_match.group(0) if url_match else yt_match.group(0)
         else:
             video_id = yt_match.group(1)
+        logger.info(f"Auto-detected YouTube link in chat {msg.chat_id} from {msg.from_id}: {video_id}")
         _react(bot, accid, msg.id, "🤖")
         t = threading.Thread(target=_handle_link_info, args=(bot, accid, msg, video_id), daemon=True)
         t.start()
@@ -1623,6 +1629,7 @@ def on_new_message(bot, accid, event):
     yandex_match = YANDEX_PREVIEW_RE.search(text)
     if yandex_match:
         yandex_url = yandex_match.group(0)
+        logger.info(f"Auto-detected Yandex preview link in chat {msg.chat_id} from {msg.from_id}: {yandex_url}")
         _react(bot, accid, msg.id, "🤖")
         t = threading.Thread(target=_handle_yandex_preview, args=(bot, accid, msg, yandex_url), daemon=True)
         t.start()
@@ -1632,6 +1639,7 @@ def on_new_message(bot, accid, event):
     supported_match = SUPPORTED_URL_RE.search(text)
     if supported_match:
         video_id = supported_match.group(0) # Full URL
+        logger.info(f"Auto-detected supported link in chat {msg.chat_id} from {msg.from_id}: {video_id}")
         _react(bot, accid, msg.id, "🤖")
         t = threading.Thread(target=_handle_link_info, args=(bot, accid, msg, video_id), daemon=True)
         t.start()
