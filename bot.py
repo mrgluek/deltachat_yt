@@ -1149,6 +1149,8 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
 
     _send(bot, accid, chat_id, caption, file=filepath)
 
+    logger.info(f"Successfully sent {download_type} '{title}' (duration={dur_str}, size={size_str}, format={ext}) to chat {chat_id}")
+
     _react(bot, accid, req_msg_id, "☑️")
 
     database.add_download(chat_id, msg.from_id, video_id, title, int(duration or 0), download_type, filesize)
