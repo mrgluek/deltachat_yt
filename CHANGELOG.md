@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [1.6.4] - 2026-06-16
 
 ### Added
-- **Automatic Transport Failover:** Added a robust event-driven transport failover mechanism. The bot now listens to the core's `MSG_FAILED` event. When a message fails to deliver, it automatically rotates to the next configured backup transport, updates `configured_addr`, retries the failed message using `resend_messages`, and alerts the administrator of the failover.
+- **Automatic Transport Failover:** Added a robust event-driven transport failover mechanism. The bot now listens to the core's `MSG_FAILED` event. When a message fails to deliver, it automatically rotates to the next configured backup transport, updates `configured_addr`, and schedules a resend of the message using exponential backoff (5s, 10s, 20s, 40s...) via an asynchronous timer thread. The failover process is limited to a maximum of 10 attempts per message to prevent infinite loops, and the administrator is alerted only on the first failure.
 
 ## [1.6.3] - 2026-06-15
 

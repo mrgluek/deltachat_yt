@@ -5,7 +5,7 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 ## Features
 
 - **Multi-Service Support:** Downloads from YouTube, **Yandex Music, PeerTube, Rutube, Dzen, OK.ru, Coub, Pinterest, SoundCloud, Imgur, Facebook, Vimeo, VK, vkvideo.ru, Twitter, Reddit, Instagram, TikTok, Twitch, Bilibili** and more via `yt-dlp`.
-- **Automatic Transport Failover:** Automatically detects message delivery failures and switches the primary active transport to a backup relay (e.g., Chatmail) in round-robin fashion, ensuring the bot remains online and responsive without administrator intervention.
+- **Automatic Transport Failover:** Automatically detects message delivery failures via raw core events, switches the primary active transport to a backup relay in round-robin fashion, and schedules a resend of the message using exponential backoff (5s, 10s, 20s, 40s...) via an asynchronous timer thread (up to a maximum of 10 attempts per message) to prevent infinite retry loops and CPU spikes.
 - **Yandex Preview Resolution:** Automatically resolves Yandex Video Preview links (`yandex.ru/video/preview/...`) to their underlying source video links (e.g. Rutube, YouTube, etc.) and processes them, preserving original timestamp parameters (`?t=...`).
 - **Video/Audio Trimming:** Automatically trims downloaded video and audio tracks based on start time parameters (e.g., `?t=51`, `?t=1m20s`, or `&start=80`) present in the URL, downloading and sending only the requested section.
 - **Video Downloads (`/yt`):** Downloads video in MP4 (H.264 + AAC) at **360p or 480p** (automatically uses 360p for videos over 10 minutes to stay within size limits).
