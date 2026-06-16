@@ -11,7 +11,7 @@ All notable changes to this project will be documented in this file.
 - **E2E Failover Loop & Key Fallback**:
   - Added fallback support for both `chat_id` and `chatId` keys in message snapshots to prevent `chat 'Unknown' (ID: None)` errors.
   - Downgraded permanent E2E and resend logs to `WARNING`.
-  - Blocked sending of admin failover alerts if the failed message itself was sent to the admin chat, preventing recursion.
+  - Removed administrative failover alert messages completely, relying entirely on structured logging to prevent any potential loop risks.
 
 
 ## [1.6.3] - 2026-06-15
