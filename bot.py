@@ -264,6 +264,8 @@ def _resolve_yandex_preview(yandex_url: str) -> str | None:
 
 def _make_yt_url(video_id: str) -> str:
     if video_id.startswith("http://") or video_id.startswith("https://"):
+        if "music.yandex." in video_id and _active_yandex_tld:
+            video_id = re.sub(r'(https?://music\.yandex\.)(?:ru|com|by|kz|uz)(/)', f'\\g<1>{_active_yandex_tld}\\2', video_id)
         return video_id
     return f"https://youtu.be/{video_id}"
 
@@ -557,6 +559,8 @@ def _is_bot_blocked(bot, accid, msg) -> bool:
 
 # Proxy settings
 PROXY = os.getenv("PROXY")
+
+_active_yandex_tld = None
 
 def _clean_error(err: str) -> str:
     """Clean up raw yt-dlp error messages to be user-friendly."""
@@ -2234,6 +2238,7 @@ def on_init(bot, args):
 
 
 def _check_cookies_on_startup(bot):
+    global _active_yandex_tld
     cookies_path = os.path.join("data", "cookies.txt")
     if not os.path.exists(cookies_path):
         bot.logger.info("No cookies.txt found in data directory. Yandex Music will run in guest mode.")
@@ -2255,6 +2260,16 @@ def _check_cookies_on_startup(bot):
         bot.logger.info("cookies.txt loaded, but contains no Yandex cookies.")
         return
 
+    # Gather Yandex domains present in cookies
+    yandex_tlds = set()
+    for cookie in cookie_jar:
+        m = re.search(r'\byandex\.(ru|by|kz|uz|com)\b', cookie.domain)
+        if m:
+            yandex_tlds.add(m.group(1))
+
+    tlds_to_try = list(yandex_tlds) if yandex_tlds else ['ru', 'by', 'kz', 'uz', 'com']
+    bot.logger.info(f"Loaded {len(yandex_cookies)} Yandex cookies. Verifying domains: {', '.join(tlds_to_try)}")
+
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
     opener.addheaders = [
         ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
@@ -2262,31 +2277,41 @@ def _check_cookies_on_startup(bot):
         ("X-Requested-With", "XMLHttpRequest")
     ]
 
-    try:
-        # Check if logged in
-        req = urllib.request.Request("https://music.yandex.ru/handlers/library.jsx")
-        with opener.open(req, timeout=10) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            owner = data.get("owner", {})
-            login = owner.get("login")
-            name = owner.get("name")
-            bot.logger.info(f"Yandex Music cookie check: Logged in as {name or 'Unknown'} (Login: {login or 'Unknown'})")
-            
-            # Check a test track to verify plus/access
-            track_req = urllib.request.Request("https://music.yandex.ru/handlers/track.jsx?track=150402031:41648883")
-            with opener.open(track_req, timeout=10) as tr_response:
-                tr_data = json.loads(tr_response.read().decode('utf-8'))
-                if "track" in tr_data:
-                    bot.logger.info("Yandex Music cookie check: ✅ Yandex Plus subscription / Premium access is ACTIVE and verified!")
-                else:
-                    bot.logger.warning("Yandex Music cookie check: ⚠️ Session is logged in but premium tracks are inaccessible (possible region lock or no Plus subscription).")
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            bot.logger.warning("Yandex Music cookie check: ⚠️ Cookies in data/cookies.txt are EXPIRED or INVALID (Yandex returned 404).")
-        else:
-            bot.logger.warning(f"Yandex Music cookie check failed (HTTP {e.code}): {e.reason}")
-    except Exception as e:
-        bot.logger.warning(f"Yandex Music cookie check encountered an error: {e}")
+    successful_tld = None
+    for tld in tlds_to_try:
+        try:
+            req = urllib.request.Request(f"https://music.yandex.{tld}/handlers/library.jsx")
+            with opener.open(req, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                owner = data.get("owner", {})
+                login = owner.get("login")
+                name = owner.get("name")
+                bot.logger.info(f"Yandex Music cookie check: ✅ Logged in on music.yandex.{tld} as {name or 'Unknown'} (Login: {login or 'Unknown'})")
+                
+                # Check a test track to verify plus/access on this domain
+                track_req = urllib.request.Request(f"https://music.yandex.{tld}/handlers/track.jsx?track=150402031:41648883")
+                with opener.open(track_req, timeout=10) as tr_response:
+                    tr_data = json.loads(tr_response.read().decode('utf-8'))
+                    if "track" in tr_data:
+                        bot.logger.info(f"Yandex Music cookie check: ✅ Yandex Plus subscription is ACTIVE and verified on music.yandex.{tld}!")
+                        successful_tld = tld
+                        break
+                    else:
+                        bot.logger.warning(f"Yandex Music cookie check: ⚠️ Session is logged in on music.yandex.{tld} but premium tracks are inaccessible.")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                # 404 is expected for domains where the user has no session
+                continue
+            else:
+                bot.logger.warning(f"Yandex Music check on domain .{tld} returned HTTP {e.code}: {e.reason}")
+        except Exception as e:
+            bot.logger.warning(f"Yandex Music check on domain .{tld} failed: {e}")
+
+    if successful_tld:
+        _active_yandex_tld = successful_tld
+        bot.logger.info(f"Yandex Music active domain set to: music.yandex.{successful_tld} (all outgoing Yandex Music URLs will be automatically mapped to this domain).")
+    else:
+        bot.logger.warning("Yandex Music cookie check: ⚠️ Cookies in data/cookies.txt are EXPIRED or INVALID on all tested domains (Yandex returned 404). Yandex Music downloads may fail.")
 
 
 @dc_cli.on_start

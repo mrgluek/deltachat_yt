@@ -4,6 +4,7 @@ import urllib.request
 import json
 import os
 import sys
+import re
 
 def check_cookies(cookies_path, test_track="150402031:41648883"):
     if not os.path.exists(cookies_path):
@@ -26,6 +27,16 @@ def check_cookies(cookies_path, test_track="150402031:41648883"):
         
     print(f"ℹ️ Loaded {len(yandex_cookies)} Yandex cookies from {cookies_path}")
 
+    # Gather Yandex domains present in cookies
+    yandex_tlds = set()
+    for cookie in cookie_jar:
+        m = re.search(r'\byandex\.(ru|by|kz|uz|com)\b', cookie.domain)
+        if m:
+            yandex_tlds.add(m.group(1))
+
+    tlds_to_try = list(yandex_tlds) if yandex_tlds else ['ru', 'by', 'kz', 'uz', 'com']
+    print(f"ℹ️ Domains present in cookies to check: {', '.join(tlds_to_try)}")
+
     # Build opener with cookies
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
     opener.addheaders = [
@@ -34,68 +45,63 @@ def check_cookies(cookies_path, test_track="150402031:41648883"):
         ("X-Requested-With", "XMLHttpRequest")
     ]
 
-    # Step 1: library.jsx (check if session is active)
-    print("\n1. Checking library endpoint (login status)...")
-    logged_in = False
-    try:
-        req = urllib.request.Request("https://music.yandex.ru/handlers/library.jsx")
-        with opener.open(req, timeout=15) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            owner = data.get("owner", {})
-            uid = owner.get("uid")
-            login = owner.get("login")
-            name = owner.get("name")
-            print("✅ Status: Logged In!")
-            print(f"👤 Account: {name or 'Unknown'} (Login: {login or 'Unknown'}, UID: {uid or 'Unknown'})")
-            logged_in = True
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            print("❌ Status: Not Logged In (or cookies expired/invalid). Yandex returned 404.")
-        else:
-            print(f"❌ HTTP Error {e.code}: {e.reason}")
-    except Exception as e:
-        print(f"❌ Error during request: {e}")
+    successful_tld = None
 
-    # Step 2: track.jsx (check if test track is accessible)
-    print(f"\n2. Checking track API for '{test_track}'...")
-    try:
-        url = f"https://music.yandex.ru/handlers/track.jsx?track={test_track}"
-        req = urllib.request.Request(url)
-        with opener.open(req, timeout=15) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            
-            # If we get track data, then the session has access
-            track = data.get("track", {})
-            title = track.get("title")
-            artists = ", ".join([a.get("name") for a in track.get("artists", [])])
-            
-            print("✅ Status: Track is Accessible!")
-            print(f"🎵 Track: {title} - {artists}")
-            
-            # Look for Yandex Plus indicator in track info
-            # Usually premium tracks will have special flags if accessible via Plus
-            has_plus = track.get("hasPlus", False) or data.get("hasPlus", False)
-            if has_plus:
-                print("⭐ Yandex Plus subscription: ACTIVE (explicitly indicated)")
+    for tld in tlds_to_try:
+        print(f"\nChecking domain: music.yandex.{tld}...")
+        try:
+            req = urllib.request.Request(f"https://music.yandex.{tld}/handlers/library.jsx")
+            with opener.open(req, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                owner = data.get("owner", {})
+                uid = owner.get("uid")
+                login = owner.get("login")
+                name = owner.get("name")
+                print(f"✅ Status: Logged In on music.yandex.{tld}!")
+                print(f"👤 Account: {name or 'Unknown'} (Login: {login or 'Unknown'}, UID: {uid or 'Unknown'})")
+                
+                # Check track access on this domain
+                print(f"Checking track '{test_track}' on music.yandex.{tld}...")
+                track_url = f"https://music.yandex.{tld}/handlers/track.jsx?track={test_track}"
+                track_req = urllib.request.Request(track_url)
+                with opener.open(track_req, timeout=10) as tr_response:
+                    tr_data = json.loads(tr_response.read().decode('utf-8'))
+                    if "track" in tr_data:
+                        track = tr_data["track"]
+                        title = track.get("title")
+                        artists = ", ".join([a.get("name") for a in track.get("artists", [])])
+                        print(f"✅ Status: Track is Accessible on music.yandex.{tld}!")
+                        print(f"🎵 Track: {title} - {artists}")
+                        
+                        has_plus = track.get("hasPlus", False) or tr_data.get("hasPlus", False)
+                        if has_plus:
+                            print(f"⭐ Yandex Plus subscription: ACTIVE on music.yandex.{tld} (explicitly indicated)")
+                        else:
+                            print(f"ℹ️ Yandex Plus subscription: Likely ACTIVE on music.yandex.{tld} (successfully bypassed block)")
+                        
+                        successful_tld = tld
+                        break
+                    else:
+                        print(f"⚠️ Session is logged in on music.yandex.{tld} but track info is missing in response.")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                print(f"❌ Not Logged In on music.yandex.{tld} (Yandex returned 404)")
             else:
-                print("ℹ️ Yandex Plus subscription: Likely ACTIVE (successfully bypassed 404 block)")
-            return True
-            
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            print("❌ Status: Track is INACCESSIBLE. Yandex returned 404.")
-            print("👉 This means the cookies do not have a Yandex Plus subscription, or this track is not available in the IP's region.")
-        else:
-            print(f"❌ HTTP Error {e.code}: {e.reason}")
-    except Exception as e:
-        print(f"❌ Error during request: {e}")
+                print(f"❌ HTTP Error {e.code} on music.yandex.{tld}: {e.reason}")
+        except Exception as e:
+            print(f"❌ Error checking music.yandex.{tld}: {e}")
 
-    return False
+    if successful_tld:
+        print(f"\n🎉 SUCCESS! Valid authenticated session found on domain: music.yandex.{successful_tld}")
+        print(f"👉 In your bot, Yandex Music links will be automatically redirected to use this domain.")
+        return True
+    else:
+        print("\n❌ FAILURE: No active session found. Your cookies are either expired, invalid, or do not have a Yandex Plus subscription.")
+        return False
 
 if __name__ == "__main__":
     path = "data/cookies.txt"
     if len(sys.argv) > 1:
         path = sys.argv[1]
     
-    # Default test track: https://music.yandex.ru/album/41648883/track/150402031
     check_cookies(path)
