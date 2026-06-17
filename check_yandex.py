@@ -89,6 +89,8 @@ def check_cookies(cookies_path, test_track="150402031:41648883"):
                 body = e.read().decode('utf-8', errors='replace')
                 if "запросы" in body and "автоматические" in body or "captcha" in body.lower():
                     print(f"⚠️ Yandex is blocking your IP address on domain .{tld} with a CAPTCHA challenge.")
+                elif "no longer available" in body.lower() or "ya.cc/t/" in body:
+                    print(f"⚠️ Yandex is GEOBLOCKING your IP address on domain .{tld} ('This page is no longer available'). A Russian/CIS proxy is required.")
             except Exception:
                 pass
 

@@ -2304,6 +2304,8 @@ def _check_cookies_on_startup(bot):
                 body = e.read().decode('utf-8', errors='replace')
                 if "запросы" in body and "автоматические" in body or "captcha" in body.lower():
                     bot.logger.warning(f"Yandex Music cookie check: ⚠️ Yandex is blocking the bot's IP address (domain .{tld}) with a CAPTCHA challenge.")
+                elif "no longer available" in body.lower() or "ya.cc/t/" in body:
+                    bot.logger.warning(f"Yandex Music cookie check: ⚠️ Yandex is GEOBLOCKING the bot's IP address (domain .{tld}) ('This page is no longer available'). A Russian/CIS proxy is required.")
             except Exception:
                 pass
 
