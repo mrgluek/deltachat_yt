@@ -15,6 +15,8 @@ services:
       - DC_DB_DIR=/app/data
       - DB_PATH=/app/data/ytbot.db
       - ALLOWED_BOT_EMAILS=${ALLOWED_BOT_EMAILS:-}
+      - PROXY=${PROXY:-}
+      - YANDEX_PROXY=${YANDEX_PROXY:-}
     deploy:
       resources:
         limits:

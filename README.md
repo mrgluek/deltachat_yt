@@ -81,15 +81,33 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 
 6. Add the bot in Delta Chat and send `/initadmin` to claim ownership.
 
-## Cookies (Age-Restricted & VEVO Content)
+## Cookies & Proxy (Age-Restricted & Yandex Music Content)
 
-To download age-restricted or VEVO-locked videos, place a valid YouTube `cookies.txt` (Netscape format) in the `data/` directory:
+Some contents (such as age-restricted/VEVO videos, or Yandex Music tracks) require authentication or a premium subscription.
 
+### 1. Set Up Cookies
+To authenticate downloads, export cookies from your browser (using the **"Get cookies.txt LOCALLY"** browser extension in **Netscape** format) while logged into Yandex Music (with Plus subscription) or YouTube. Save this file to the bot's data directory:
 ```bash
 cp cookies.txt ~/deltachat_yt/data/
 ```
+The bot will load these cookies automatically on startup and use them for Yandex Music and YouTube.
 
-Export cookies using the **"Get cookies.txt LOCALLY"** browser extension. Use a dedicated Google account — not your primary one. The bot will detect and use the file automatically on every request.
+### 2. Verify Yandex Music Cookies
+You can verify if the bot successfully logs in and accesses premium tracks on Yandex Music using the included diagnostic script:
+- Run on host: `python3 check_yandex.py data/cookies.txt`
+- Run inside Docker: `docker compose exec yt_bot python check_yandex.py data/cookies.txt`
+
+### 3. Proxy Configuration (Bypass Yandex Geoblocking)
+Since Yandex Music is geoblocked outside Russia/CIS (returning "This page is no longer available" or CAPTCHAs to datacenter/foreign IPs), you will need a proxy to download Yandex Music tracks from foreign servers.
+
+You can configure proxies in a `.env` file in the project directory:
+```env
+# Global proxy for all downloads (YouTube, SoundCloud, etc.)
+PROXY=socks5://user:password@ip:port
+
+# Yandex-specific proxy (Only routes Yandex Music requests through this proxy, keeping YouTube downloads fast and direct)
+YANDEX_PROXY=http://user:password@ru_proxy_ip:port
+```
 
 ## Admin Management
 
