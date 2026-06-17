@@ -24,7 +24,7 @@ def check_cookies(cookies_path, test_track="150402031:41648883"):
                 status = client.account_status()
                 if status.plus.has_plus:
                     print(f"✅ Yandex Plus subscription is ACTIVE via YANDEX_TOKEN!")
-                    print(f"👤 Account: {client.me().account.display_name} (Login: {client.me().account.login})")
+                    print(f"👤 Account: {client.me.account.display_name} (Login: {client.me.account.login})")
                     return True
                 else:
                     print("❌ Yandex Plus subscription is INACTIVE or missing on the provided token.")

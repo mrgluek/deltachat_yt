@@ -2431,7 +2431,7 @@ def _check_cookies_on_startup(bot):
                 client = Client(token).init()
                 status = client.account_status()
                 if status.plus.has_plus:
-                    bot.logger.info(f"Yandex Music check: ✅ Yandex Plus subscription is ACTIVE via YANDEX_TOKEN (Account: {client.me().account.display_name})!")
+                    bot.logger.info(f"Yandex Music check: ✅ Yandex Plus subscription is ACTIVE via YANDEX_TOKEN (Account: {client.me.account.display_name})!")
                     _active_yandex_tld = 'ru'
                     return
                 else:
