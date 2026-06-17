@@ -84,6 +84,14 @@ def check_cookies(cookies_path, test_track="150402031:41648883"):
                     else:
                         print(f"⚠️ Session is logged in on music.yandex.{tld} but track info is missing in response.")
         except urllib.error.HTTPError as e:
+            # Check if the error body contains Yandex CAPTCHA block
+            try:
+                body = e.read().decode('utf-8', errors='replace')
+                if "запросы" in body and "автоматические" in body or "captcha" in body.lower():
+                    print(f"⚠️ Yandex is blocking your IP address on domain .{tld} with a CAPTCHA challenge.")
+            except Exception:
+                pass
+
             if e.code == 404:
                 print(f"❌ Not Logged In on music.yandex.{tld} (Yandex returned 404)")
             else:

@@ -2299,6 +2299,14 @@ def _check_cookies_on_startup(bot):
                     else:
                         bot.logger.warning(f"Yandex Music cookie check: ⚠️ Session is logged in on music.yandex.{tld} but premium tracks are inaccessible.")
         except urllib.error.HTTPError as e:
+            # Check if the error body contains Yandex CAPTCHA block
+            try:
+                body = e.read().decode('utf-8', errors='replace')
+                if "запросы" in body and "автоматические" in body or "captcha" in body.lower():
+                    bot.logger.warning(f"Yandex Music cookie check: ⚠️ Yandex is blocking the bot's IP address (domain .{tld}) with a CAPTCHA challenge.")
+            except Exception:
+                pass
+
             if e.code == 404:
                 # 404 is expected for domains where the user has no session
                 continue
