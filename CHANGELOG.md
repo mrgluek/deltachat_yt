@@ -9,6 +9,8 @@ All notable changes to this project will be documented in this file.
   - The bot now automatically and asynchronously verifies Yandex Music cookies in `data/cookies.txt` on startup across all domains present in the cookies (`yandex.ru`, `yandex.by`, `yandex.kz`, `yandex.uz`, `yandex.com`).
   - Automatically identifies which regional Yandex domain is successfully authenticated and sets it as the active Yandex domain.
   - Dynamically rewrites all incoming Yandex Music URLs to match the active authenticated domain before requesting `yt-dlp` info or downloading, ensuring that regional login cookies are correctly sent and authorized.
+- **Yandex-Specific Proxy Configuration**:
+  - Added support for the `YANDEX_PROXY` environment variable. When configured, only Yandex Music requests and startup cookie checks are routed through this proxy, while other media sources (like YouTube) continue to download directly (or via the global `PROXY` fallback), preventing unnecessary slow-downs or data costs.
 
 ### Fixed
 - **User-Friendly Error Formatting**:

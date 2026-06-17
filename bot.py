@@ -559,6 +559,7 @@ def _is_bot_blocked(bot, accid, msg) -> bool:
 
 # Proxy settings
 PROXY = os.getenv("PROXY")
+YANDEX_PROXY = os.getenv("YANDEX_PROXY")
 
 _active_yandex_tld = None
 
@@ -586,8 +587,11 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
         "--add-header", "Accept-Language: en-US,en;q=0.9",
     ]
     
-    if PROXY:
-        cmd.extend(["--proxy", PROXY])
+    active_proxy = PROXY
+    if "yandex." in url and YANDEX_PROXY:
+        active_proxy = YANDEX_PROXY
+    if active_proxy:
+        cmd.extend(["--proxy", active_proxy])
         
     cookies_path = os.path.join("data", "cookies.txt")
     if os.path.exists(cookies_path):
@@ -642,14 +646,18 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "-o", out_template,
     ])
     
-    if PROXY:
-        cmd.extend(["--proxy", PROXY])
+    url = _make_yt_url(video_id)
+    active_proxy = PROXY
+    if "yandex." in url and YANDEX_PROXY:
+        active_proxy = YANDEX_PROXY
+    if active_proxy:
+        cmd.extend(["--proxy", active_proxy])
         
     cookies_path = os.path.join("data", "cookies.txt")
     if os.path.exists(cookies_path):
         cmd.extend(["--cookies", cookies_path])
         
-    cmd.append(_make_yt_url(video_id))
+    cmd.append(url)
     
     try:
         async with _download_semaphore:
@@ -2270,7 +2278,11 @@ def _check_cookies_on_startup(bot):
     tlds_to_try = list(yandex_tlds) if yandex_tlds else ['ru', 'by', 'kz', 'uz', 'com']
     bot.logger.info(f"Loaded {len(yandex_cookies)} Yandex cookies. Verifying domains: {', '.join(tlds_to_try)}")
 
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    handlers = [urllib.request.HTTPCookieProcessor(cookie_jar)]
+    active_proxy = YANDEX_PROXY or PROXY
+    if active_proxy:
+        handlers.append(urllib.request.ProxyHandler({'http': active_proxy, 'https': active_proxy}))
+    opener = urllib.request.build_opener(*handlers)
     opener.addheaders = [
         ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
         ("Referer", "https://music.yandex.ru/"),
