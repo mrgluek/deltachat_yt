@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [1.6.5] - 2026-06-17
 
+### Added
+- **Startup Cookie Verification**:
+  - The bot now automatically and asynchronously verifies Yandex Music cookies in `data/cookies.txt` on startup. It logs whether the session is successfully authenticated and checks access to premium tracks, outputting warnings if the cookies are invalid or expired.
+
 ### Fixed
 - **User-Friendly Error Formatting**:
   - Downgraded failed `yt-dlp` info fetch and download logs from `ERROR` to `WARNING`.

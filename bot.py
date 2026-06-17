@@ -2233,6 +2233,62 @@ def on_init(bot, args):
             bot.logger.warning(f"Could not set avatar: {e}")
 
 
+def _check_cookies_on_startup(bot):
+    cookies_path = os.path.join("data", "cookies.txt")
+    if not os.path.exists(cookies_path):
+        bot.logger.info("No cookies.txt found in data directory. Yandex Music will run in guest mode.")
+        return
+
+    import http.cookiejar
+    import urllib.request
+    import json
+
+    cookie_jar = http.cookiejar.MozillaCookieJar(cookies_path)
+    try:
+        cookie_jar.load(ignore_discard=True, ignore_expires=True)
+    except Exception as e:
+        bot.logger.warning(f"Failed to parse data/cookies.txt: {e}")
+        return
+
+    yandex_cookies = [cookie for cookie in cookie_jar if "yandex" in cookie.domain]
+    if not yandex_cookies:
+        bot.logger.info("cookies.txt loaded, but contains no Yandex cookies.")
+        return
+
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    opener.addheaders = [
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        ("Referer", "https://music.yandex.ru/"),
+        ("X-Requested-With", "XMLHttpRequest")
+    ]
+
+    try:
+        # Check if logged in
+        req = urllib.request.Request("https://music.yandex.ru/handlers/library.jsx")
+        with opener.open(req, timeout=10) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            owner = data.get("owner", {})
+            login = owner.get("login")
+            name = owner.get("name")
+            bot.logger.info(f"Yandex Music cookie check: Logged in as {name or 'Unknown'} (Login: {login or 'Unknown'})")
+            
+            # Check a test track to verify plus/access
+            track_req = urllib.request.Request("https://music.yandex.ru/handlers/track.jsx?track=150402031:41648883")
+            with opener.open(track_req, timeout=10) as tr_response:
+                tr_data = json.loads(tr_response.read().decode('utf-8'))
+                if "track" in tr_data:
+                    bot.logger.info("Yandex Music cookie check: ✅ Yandex Plus subscription / Premium access is ACTIVE and verified!")
+                else:
+                    bot.logger.warning("Yandex Music cookie check: ⚠️ Session is logged in but premium tracks are inaccessible (possible region lock or no Plus subscription).")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            bot.logger.warning("Yandex Music cookie check: ⚠️ Cookies in data/cookies.txt are EXPIRED or INVALID (Yandex returned 404).")
+        else:
+            bot.logger.warning(f"Yandex Music cookie check failed (HTTP {e.code}): {e.reason}")
+    except Exception as e:
+        bot.logger.warning(f"Yandex Music cookie check encountered an error: {e}")
+
+
 @dc_cli.on_start
 def on_start(bot, _args):
     global dc_bot_instance, dc_accid
@@ -2247,6 +2303,9 @@ def on_start(bot, _args):
         except Exception as e:
             bot.logger.error(f"Failed to set storage optimization settings in on_start: {e}")
             
+        # Check cookies asynchronously on startup
+        threading.Thread(target=_check_cookies_on_startup, args=(bot,), daemon=True).start()
+
         allowed_bots_env = os.environ.get("ALLOWED_BOT_EMAILS", "")
         allowed_bots = [e.strip().lower() for e in allowed_bots_env.split(",") if e.strip()]
         if allowed_bots:
