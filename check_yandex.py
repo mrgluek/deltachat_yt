@@ -37,8 +37,14 @@ def check_cookies(cookies_path, test_track="150402031:41648883"):
     tlds_to_try = list(yandex_tlds) if yandex_tlds else ['ru', 'by', 'kz', 'uz', 'com']
     print(f"ℹ️ Domains present in cookies to check: {', '.join(tlds_to_try)}")
 
-    # Build opener with cookies
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    # Build opener with cookies and optional proxy
+    handlers = [urllib.request.HTTPCookieProcessor(cookie_jar)]
+    active_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+    if active_proxy:
+        print(f"ℹ️ Routing check through proxy: {active_proxy}")
+        handlers.append(urllib.request.ProxyHandler({'http': active_proxy, 'https': active_proxy}))
+    
+    opener = urllib.request.build_opener(*handlers)
     opener.addheaders = [
         ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
         ("Referer", "https://music.yandex.ru/"),
@@ -89,13 +95,11 @@ def check_cookies(cookies_path, test_track="150402031:41648883"):
                 body = e.read().decode('utf-8', errors='replace')
                 if "запросы" in body and "автоматические" in body or "captcha" in body.lower():
                     print(f"⚠️ Yandex is blocking your IP address on domain .{tld} with a CAPTCHA challenge.")
-                elif "no longer available" in body.lower() or "ya.cc/t/" in body:
-                    print(f"⚠️ Yandex is GEOBLOCKING your IP address on domain .{tld} ('This page is no longer available'). A Russian/CIS proxy is required.")
             except Exception:
                 pass
 
             if e.code == 404:
-                print(f"❌ Not Logged In on music.yandex.{tld} (Yandex returned 404)")
+                print(f"❌ Not Logged In on music.yandex.{tld} (Yandex returned 404 / Invalid Session)")
             else:
                 print(f"❌ HTTP Error {e.code} on music.yandex.{tld}: {e.reason}")
         except Exception as e:
@@ -106,7 +110,7 @@ def check_cookies(cookies_path, test_track="150402031:41648883"):
         print(f"👉 In your bot, Yandex Music links will be automatically redirected to use this domain.")
         return True
     else:
-        print("\n❌ FAILURE: No active session found. Your cookies are either expired, invalid, or do not have a Yandex Plus subscription.")
+        print("\n❌ FAILURE: No active session found. Your cookies are either expired, invalid, or geoblocked.")
         return False
 
 if __name__ == "__main__":

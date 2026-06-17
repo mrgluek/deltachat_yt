@@ -2316,13 +2316,11 @@ def _check_cookies_on_startup(bot):
                 body = e.read().decode('utf-8', errors='replace')
                 if "запросы" in body and "автоматические" in body or "captcha" in body.lower():
                     bot.logger.warning(f"Yandex Music cookie check: ⚠️ Yandex is blocking the bot's IP address (domain .{tld}) with a CAPTCHA challenge.")
-                elif "no longer available" in body.lower() or "ya.cc/t/" in body:
-                    bot.logger.warning(f"Yandex Music cookie check: ⚠️ Yandex is GEOBLOCKING the bot's IP address (domain .{tld}) ('This page is no longer available'). A Russian/CIS proxy is required.")
             except Exception:
                 pass
 
             if e.code == 404:
-                # 404 is expected for domains where the user has no session
+                # 404 is expected for domains where the user has no session or cookies are invalid
                 continue
             else:
                 bot.logger.warning(f"Yandex Music check on domain .{tld} returned HTTP {e.code}: {e.reason}")
@@ -2333,7 +2331,7 @@ def _check_cookies_on_startup(bot):
         _active_yandex_tld = successful_tld
         bot.logger.info(f"Yandex Music active domain set to: music.yandex.{successful_tld} (all outgoing Yandex Music URLs will be automatically mapped to this domain).")
     else:
-        bot.logger.warning("Yandex Music cookie check: ⚠️ Cookies in data/cookies.txt are EXPIRED or INVALID on all tested domains (Yandex returned 404). Yandex Music downloads may fail.")
+        bot.logger.warning("Yandex Music cookie check: ⚠️ Cookies in data/cookies.txt are EXPIRED, INVALID, or GEOBLOCKED on all tested domains. Yandex Music downloads may fail.")
 
 
 @dc_cli.on_start
