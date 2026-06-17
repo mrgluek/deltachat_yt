@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.5] - 2026-06-17
+
+### Fixed
+- **User-Friendly Error Formatting**:
+  - Downgraded failed `yt-dlp` info fetch and download logs from `ERROR` to `WARNING`.
+  - Handled the known `yt-dlp` TypeError crash on failed/blocked Yandex Music requests (`argument of type 'bool' is not iterable`) and replaced it with a clean, descriptive message explaining potential reasons (subscription requirements, region blocks, captcha challenge).
+
 ## [1.6.4] - 2026-06-16
 
 ### Added

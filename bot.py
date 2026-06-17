@@ -558,6 +558,17 @@ def _is_bot_blocked(bot, accid, msg) -> bool:
 # Proxy settings
 PROXY = os.getenv("PROXY")
 
+def _clean_error(err: str) -> str:
+    """Clean up raw yt-dlp error messages to be user-friendly."""
+    if not err:
+        return "Unknown error"
+    err_lower = err.lower()
+    if "argument of type 'bool'" in err_lower:
+        return "Yandex Music error: Content is unavailable (might be restricted to Russia/CIS, require a subscription, or Yandex is captcha-blocking the request)."
+    if "uploader has not made this video available in your country" in err_lower:
+        return "This video is not available in the bot's country/region."
+    return err
+
 async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
     """Fetch video metadata without downloading. Returns (info, error_msg)."""
     url = _make_yt_url(video_id)
@@ -589,12 +600,9 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
             return json.loads(stdout), None
         
         err = stderr.decode(errors='replace').strip()
-        # Clean up huge regional restriction errors
-        if "uploader has not made this video available in your country" in err:
-            err = "This video is not available in the bot's country/region."
-            
-        logger.error(f"yt-dlp info fetch failed for {video_id}: {err}")
-        return None, err[:200]
+        cleaned_err = _clean_error(err)
+        logger.warning(f"yt-dlp info fetch failed for {video_id}: {err}")
+        return None, cleaned_err[:200]
     except asyncio.TimeoutError:
         return None, "Timeout (30s)"
     except Exception as e:
@@ -652,7 +660,10 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
                 return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
             if "max-filesize" in err.lower() or "filesize" in err.lower():
                 return None, None, "📦 Video exceeds 30 MB size limit"
-            return None, None, f"yt-dlp error: {err[:200]}"
+            
+            cleaned_err = _clean_error(err)
+            logger.warning(f"Download failed for {video_id}: {err}")
+            return None, None, f"yt-dlp error: {cleaned_err[:200]}"
 
         if not stdout:
             err = stderr.decode(errors='replace').strip()
