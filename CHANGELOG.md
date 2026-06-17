@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.6] - 2026-06-17
+
+### Added
+- **Native Yandex Music Downloader Integration**:
+  - Replaced the deprecated and broken web-based Yandex Music extractor in `yt-dlp` (which returned 404 / invalid session errors) with a native Python downloader utilizing the `yandex-music` library.
+  - Implemented token-based authentication via the `YANDEX_TOKEN` environment variable.
+  - Added the `get_token.py` interactive CLI tool to generate Yandex OAuth tokens via Yandex Device Auth, automatically routed through the proxy to prevent geoblocking.
+  - Added OAuth token validation and Yandex Plus subscription status checking during startup and inside the `check_yandex.py` verification script.
+
 ## [1.6.5] - 2026-06-17
 
 ### Added

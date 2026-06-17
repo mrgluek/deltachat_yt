@@ -81,23 +81,39 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 
 6. Add the bot in Delta Chat and send `/initadmin` to claim ownership.
 
-## Cookies & Proxy (Age-Restricted & Yandex Music Content)
+## Cookies, OAuth Token & Proxy (Age-Restricted & Yandex Music Content)
 
 Some contents (such as age-restricted/VEVO videos, or Yandex Music tracks) require authentication or a premium subscription.
 
-### 1. Set Up Cookies
-To authenticate downloads, export cookies from your browser (using the **"Get cookies.txt LOCALLY"** browser extension in **Netscape** format) while logged into Yandex Music (with Plus subscription) or YouTube. Save this file to the bot's data directory:
+> [!IMPORTANT]
+> **Yandex Music API Changes:** Yandex has permanently deprecated web-based session endpoints for downloading tracks. As a result, standard browser cookies are no longer sufficient to download tracks from Yandex Music. You **must** configure a Yandex OAuth token (`YANDEX_TOKEN`) instead.
+
+### 1. Set Up Yandex Music OAuth Token
+To authenticate Yandex Music downloads:
+1. Run the interactive token generator tool inside Docker:
+   ```bash
+   docker compose run --rm yt_bot python get_token.py
+   ```
+2. Open the URL printed by the script in your web browser (make sure you are logged in to Yandex with a Plus subscription).
+3. Enter the code shown in the terminal.
+4. Copy the generated token and save it to your `.env` file:
+   ```env
+   YANDEX_TOKEN=your_oauth_token_here
+   ```
+
+### 2. Set Up YouTube Cookies
+Export cookies from your browser (using the **"Get cookies.txt LOCALLY"** browser extension in **Netscape** format) while logged into YouTube. Save this file to the bot's data directory to download age-restricted or VEVO videos:
 ```bash
 cp cookies.txt ~/deltachat_yt/data/
 ```
-The bot will load these cookies automatically on startup and use them for Yandex Music and YouTube.
+The bot will load these cookies automatically on startup.
 
-### 2. Verify Yandex Music Cookies
-You can verify if the bot successfully logs in and accesses premium tracks on Yandex Music using the included diagnostic script:
-- Run on host: `python3 check_yandex.py data/cookies.txt`
-- Run inside Docker: `docker compose exec yt_bot python check_yandex.py data/cookies.txt`
+### 3. Verify Yandex Music Status
+You can verify if the bot successfully logs in and has an active Yandex Plus subscription using the included diagnostic script:
+- Run on host: `python3 check_yandex.py`
+- Run inside Docker: `docker compose run --rm yt_bot python check_yandex.py`
 
-### 3. Proxy Configuration (Bypass Yandex Geoblocking)
+### 4. Proxy Configuration (Bypass Yandex Geoblocking)
 Since Yandex Music is geoblocked outside Russia/CIS (returning "This page is no longer available" or CAPTCHAs to datacenter/foreign IPs), you will need a proxy to download Yandex Music tracks from foreign servers.
 
 You can configure proxies in a `.env` file in the project directory:
