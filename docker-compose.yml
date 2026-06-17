@@ -17,6 +17,7 @@ services:
       - ALLOWED_BOT_EMAILS=${ALLOWED_BOT_EMAILS:-}
       - PROXY=${PROXY:-}
       - YANDEX_PROXY=${YANDEX_PROXY:-}
+      - YANDEX_TOKEN=${YANDEX_TOKEN:-}
     deploy:
       resources:
         limits:

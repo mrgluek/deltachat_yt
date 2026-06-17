@@ -262,6 +262,88 @@ def _resolve_yandex_preview(yandex_url: str) -> str | None:
     return None
 
 
+def _parse_yandex_music_url(url: str) -> tuple[str, str | None] | None:
+    """Extract track_id and album_id from Yandex Music URL."""
+    m = re.search(r'/album/(\d+)/track/(\d+)', url)
+    if m:
+        return m.group(2), m.group(1)
+    m = re.search(r'/track/(\d+)', url)
+    if m:
+        return m.group(1), None
+    return None
+
+
+def _fetch_yandex_metadata(track_id: str, token: str) -> dict:
+    """Fetch track metadata from Yandex Music API using OAuth token."""
+    from yandex_music import Client
+    yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+    old_http = os.environ.get("HTTP_PROXY")
+    old_https = os.environ.get("HTTPS_PROXY")
+    if yandex_proxy:
+        os.environ["HTTP_PROXY"] = yandex_proxy
+        os.environ["HTTPS_PROXY"] = yandex_proxy
+    try:
+        client = Client(token).init()
+        tracks = client.tracks(track_id)
+        if not tracks:
+            raise ValueError("Track not found on Yandex Music.")
+        track = tracks[0]
+        
+        artists = [a.name for a in track.artists if a.name]
+        artist_str = ", ".join(artists) if artists else "Unknown Artist"
+        
+        cover_url = None
+        if track.cover_uri:
+            cover_url = "https://" + track.cover_uri.replace("%%", "400x400")
+            
+        return {
+            "id": track_id,
+            "title": track.title,
+            "duration": track.duration_ms / 1000.0 if track.duration_ms else 0.0,
+            "thumbnail": cover_url,
+            "artist": artist_str,
+            "uploader": artist_str,
+            "ext": "mp3",
+            "extractor": "yandexmusic",
+        }
+    finally:
+        if old_http is not None:
+            os.environ["HTTP_PROXY"] = old_http
+        else:
+            os.environ.pop("HTTP_PROXY", None)
+        if old_https is not None:
+            os.environ["HTTPS_PROXY"] = old_https
+        else:
+            os.environ.pop("HTTPS_PROXY", None)
+
+
+def _download_yandex_track(track_id: str, token: str, filepath: str):
+    """Download Yandex Music track using OAuth token."""
+    from yandex_music import Client
+    yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+    old_http = os.environ.get("HTTP_PROXY")
+    old_https = os.environ.get("HTTPS_PROXY")
+    if yandex_proxy:
+        os.environ["HTTP_PROXY"] = yandex_proxy
+        os.environ["HTTPS_PROXY"] = yandex_proxy
+    try:
+        client = Client(token).init()
+        tracks = client.tracks(track_id)
+        if not tracks:
+            raise ValueError("Track not found on Yandex Music.")
+        track = tracks[0]
+        track.download(filepath)
+    finally:
+        if old_http is not None:
+            os.environ["HTTP_PROXY"] = old_http
+        else:
+            os.environ.pop("HTTP_PROXY", None)
+        if old_https is not None:
+            os.environ["HTTPS_PROXY"] = old_https
+        else:
+            os.environ.pop("HTTPS_PROXY", None)
+
+
 def _make_yt_url(video_id: str) -> str:
     if video_id.startswith("http://") or video_id.startswith("https://"):
         if "music.yandex." in video_id and _active_yandex_tld:
@@ -577,6 +659,22 @@ def _clean_error(err: str) -> str:
 async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
     """Fetch video metadata without downloading. Returns (info, error_msg)."""
     url = _make_yt_url(video_id)
+    if "music.yandex." in url:
+        token = os.getenv("YANDEX_TOKEN")
+        if not token:
+            return None, "YANDEX_TOKEN is not set. Yandex Music now requires a token due to API changes. Please configure it in your .env."
+        parsed = _parse_yandex_music_url(url)
+        if not parsed:
+            return None, "Invalid Yandex Music URL format."
+        track_id, album_id = parsed
+        try:
+            loop = asyncio.get_event_loop()
+            info = await loop.run_in_executor(None, _fetch_yandex_metadata, track_id, token)
+            return info, None
+        except Exception as e:
+            logger.error(f"Yandex Music native info fetch failed: {e}")
+            return None, f"Yandex Music error: {e}"
+
     cmd = [
         "yt-dlp", "--no-playlist", "--dump-json", "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
@@ -756,7 +854,77 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
 
 
 async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None, end_time: int = None) -> tuple[str | None, dict | None, str | None]:
-    """Download audio. Returns (filepath, info_dict, error_string)."""
+    url = _make_yt_url(video_id)
+    if "music.yandex." in url:
+        token = os.getenv("YANDEX_TOKEN")
+        if not token:
+            return None, None, "YANDEX_TOKEN is not set. Yandex Music now requires a token due to API changes. Please configure it in your .env."
+        parsed = _parse_yandex_music_url(url)
+        if not parsed:
+            return None, None, "Invalid Yandex Music URL format."
+        track_id, album_id = parsed
+        safe_id = _get_cache_id(video_id)
+        final_filepath = os.path.join(output_dir, f"{safe_id}.mp3")
+        try:
+            loop = asyncio.get_event_loop()
+            info = await loop.run_in_executor(None, _fetch_yandex_metadata, track_id, token)
+            await loop.run_in_executor(None, _download_yandex_track, track_id, token, final_filepath)
+            filepath = final_filepath
+            
+            # If duration is long (> 10 min), transcode to mono/opus at 64k to save bandwidth/size
+            if duration > 600:
+                opus_filepath = os.path.join(output_dir, f"{safe_id}.opus")
+                transcode_cmd = [
+                    "ffmpeg", "-y", "-nostdin",
+                    "-i", filepath,
+                    "-ac", "1", "-ar", "24000", "-b:a", "64k",
+                    "-c:a", "libopus",
+                    opus_filepath
+                ]
+                proc = await asyncio.create_subprocess_exec(
+                    *transcode_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                await proc.communicate()
+                if os.path.exists(opus_filepath):
+                    try:
+                        os.remove(filepath)
+                    except:
+                        pass
+                    filepath = opus_filepath
+
+            # Handle trimming if start_time or end_time is requested
+            if start_time or end_time:
+                ext = os.path.splitext(filepath)[1]
+                trimmed_filepath = os.path.splitext(filepath)[0] + f"_trimmed{ext}"
+                trim_duration = (end_time - (start_time or 0)) if end_time else None
+                trim_cmd = [
+                    "ffmpeg", "-y", "-nostdin"
+                ]
+                if start_time:
+                    trim_cmd.extend(["-ss", str(start_time)])
+                trim_cmd.extend(["-i", filepath])
+                if trim_duration is not None:
+                    trim_cmd.extend(["-t", str(trim_duration)])
+                trim_cmd.extend([
+                    "-c", "copy" if ext != ".opus" else "libopus",
+                    trimmed_filepath
+                ])
+                proc = await asyncio.create_subprocess_exec(
+                    *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                await proc.communicate()
+                if os.path.exists(trimmed_filepath):
+                    try:
+                        os.remove(filepath)
+                    except:
+                        pass
+                    filepath = trimmed_filepath
+
+            return filepath, info, None
+        except Exception as e:
+            logger.error(f"Yandex Music native download failed: {e}")
+            return None, None, f"Yandex Music error: {e}"
+
     if start_time:
         if end_time:
             effective_duration = max(0, end_time - start_time)
@@ -2247,6 +2415,39 @@ def on_init(bot, args):
 
 def _check_cookies_on_startup(bot):
     global _active_yandex_tld
+    
+    token = os.getenv("YANDEX_TOKEN")
+    if token:
+        bot.logger.info("Yandex Music: Verifying status using YANDEX_TOKEN...")
+        try:
+            from yandex_music import Client
+            yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+            old_http = os.environ.get("HTTP_PROXY")
+            old_https = os.environ.get("HTTPS_PROXY")
+            if yandex_proxy:
+                os.environ["HTTP_PROXY"] = yandex_proxy
+                os.environ["HTTPS_PROXY"] = yandex_proxy
+            try:
+                client = Client(token).init()
+                status = client.account_status()
+                if status.plus.has_plus:
+                    bot.logger.info(f"Yandex Music check: ✅ Yandex Plus subscription is ACTIVE via YANDEX_TOKEN (Account: {client.me().account.display_name})!")
+                    _active_yandex_tld = 'ru'
+                    return
+                else:
+                    bot.logger.warning("Yandex Music check: ⚠️ Yandex Plus subscription is INACTIVE or missing on the provided token.")
+            finally:
+                if old_http is not None:
+                    os.environ["HTTP_PROXY"] = old_http
+                else:
+                    os.environ.pop("HTTP_PROXY", None)
+                if old_https is not None:
+                    os.environ["HTTPS_PROXY"] = old_https
+                else:
+                    os.environ.pop("HTTPS_PROXY", None)
+        except Exception as e:
+            bot.logger.warning(f"Yandex Music: Token verification failed: {e}")
+
     cookies_path = os.path.join("data", "cookies.txt")
     if not os.path.exists(cookies_path):
         bot.logger.info("No cookies.txt found in data directory. Yandex Music will run in guest mode.")

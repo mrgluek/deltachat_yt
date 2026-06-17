@@ -7,6 +7,41 @@ import sys
 import re
 
 def check_cookies(cookies_path, test_track="150402031:41648883"):
+    active_token = os.getenv("YANDEX_TOKEN")
+    if active_token:
+        print("ℹ️ YANDEX_TOKEN is set. Verifying status using token...")
+        try:
+            from yandex_music import Client
+            yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+            old_http = os.environ.get("HTTP_PROXY")
+            old_https = os.environ.get("HTTPS_PROXY")
+            if yandex_proxy:
+                print(f"ℹ️ Routing token check through proxy: {yandex_proxy}")
+                os.environ["HTTP_PROXY"] = yandex_proxy
+                os.environ["HTTPS_PROXY"] = yandex_proxy
+            try:
+                client = Client(active_token).init()
+                status = client.account_status()
+                if status.plus.has_plus:
+                    print(f"✅ Yandex Plus subscription is ACTIVE via YANDEX_TOKEN!")
+                    print(f"👤 Account: {client.me().account.display_name} (Login: {client.me().account.login})")
+                    return True
+                else:
+                    print("❌ Yandex Plus subscription is INACTIVE or missing on the provided token.")
+                    return False
+            finally:
+                if old_http is not None:
+                    os.environ["HTTP_PROXY"] = old_http
+                else:
+                    os.environ.pop("HTTP_PROXY", None)
+                if old_https is not None:
+                    os.environ["HTTPS_PROXY"] = old_https
+                else:
+                    os.environ.pop("HTTPS_PROXY", None)
+        except Exception as e:
+            print(f"❌ Yandex Music Token verification failed: {e}")
+            return False
+
     if not os.path.exists(cookies_path):
         print(f"❌ Cookies file not found at: {cookies_path}")
         return False
