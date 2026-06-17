@@ -13,6 +13,15 @@ def main():
     print("This script will help you authorize Yandex Music API and get an OAuth token.")
     print("Please follow the instructions below:\n")
 
+    import os
+    yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+    old_http = os.environ.get("HTTP_PROXY")
+    old_https = os.environ.get("HTTPS_PROXY")
+    if yandex_proxy:
+        print(f"ℹ️ Routing authorization request through proxy: {yandex_proxy}")
+        os.environ["HTTP_PROXY"] = yandex_proxy
+        os.environ["HTTPS_PROXY"] = yandex_proxy
+
     client = Client()
     
     def on_code(code):
