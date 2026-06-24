@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.10] - 2026-06-24
+
+### Fixed
+- **Fallback Support for Link Detection / Previews**:
+  - Refactored all metadata fetching calls (`_send_from_cache` and `_handle_link_info`) to use the new `_fetch_video_info_with_fallback` helper function.
+  - This ensures that YouTube link auto-detection/preview generation attempts all proxy/cookie fallback configurations (including `BACKUP_PROXY`) instead of failing on the first configuration and outputting country block errors to the chat.
+
 ## [1.6.9] - 2026-06-24
 
 ### Fixed

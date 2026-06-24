@@ -721,6 +721,37 @@ async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_prox
         return None, str(e)
 
 
+def _get_fallback_configs() -> list[dict]:
+    cookies_exist = os.path.exists(os.path.join("data", "cookies.txt"))
+    configs = []
+    configs.append({"use_cookies": True, "proxy": None, "desc": "default proxy with cookies" if cookies_exist else "default proxy without cookies"})
+    if cookies_exist:
+        configs.append({"use_cookies": False, "proxy": None, "desc": "default proxy without cookies"})
+    if BACKUP_PROXY:
+        configs.append({"use_cookies": False, "proxy": BACKUP_PROXY, "desc": "backup proxy without cookies"})
+        if cookies_exist:
+            configs.append({"use_cookies": True, "proxy": BACKUP_PROXY, "desc": "backup proxy with cookies"})
+    return configs
+
+
+async def _fetch_video_info_with_fallback(video_id: str) -> tuple[dict | None, str | None, int]:
+    """Fetch video metadata with cookie/proxy fallback attempts. Returns (info, error_msg, successful_config_idx)."""
+    configs = _get_fallback_configs()
+    info = None
+    error = None
+    successful_idx = 0
+    
+    for idx, cfg in enumerate(configs):
+        info, error = await _fetch_video_info(video_id, use_cookies=cfg["use_cookies"], custom_proxy=cfg["proxy"])
+        if info:
+            successful_idx = idx
+            break
+        else:
+            logger.info(f"Failed to fetch video info using {cfg['desc']}: {error}. Trying next config...")
+            
+    return info, error, successful_idx
+
+
 async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None) -> tuple[str | None, dict | None, str | None]:
     """Download video. Returns (filepath, info_dict, error_string)."""
     out_template = os.path.join(output_dir, "%(id)s_%(title).50s.%(ext)s")
@@ -1179,27 +1210,8 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
             return
     
         # 3. Fetch info to know duration for audio strategy
-        cookies_exist = os.path.exists(os.path.join("data", "cookies.txt"))
-        configs = []
-        configs.append({"use_cookies": True, "proxy": None, "desc": "default proxy with cookies" if cookies_exist else "default proxy without cookies"})
-        if cookies_exist:
-            configs.append({"use_cookies": False, "proxy": None, "desc": "default proxy without cookies"})
-        if BACKUP_PROXY:
-            configs.append({"use_cookies": False, "proxy": BACKUP_PROXY, "desc": "backup proxy without cookies"})
-            if cookies_exist:
-                configs.append({"use_cookies": True, "proxy": BACKUP_PROXY, "desc": "backup proxy with cookies"})
-
-        info = None
-        error = None
-        successful_config_index = 0
-        
-        for idx, cfg in enumerate(configs):
-            info, error = await _fetch_video_info(video_id, use_cookies=cfg["use_cookies"], custom_proxy=cfg["proxy"])
-            if info:
-                successful_config_index = idx
-                break
-            else:
-                logger.info(f"Failed to fetch video info using {cfg['desc']}: {error}. Trying next config...")
+        configs = _get_fallback_configs()
+        info, error, successful_config_index = await _fetch_video_info_with_fallback(video_id)
 
         if not info:
             _react(bot, accid, req_msg_id, "❌")
@@ -1328,7 +1340,7 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
     _react(bot, accid, req_msg_id, "⌛")
 
     if not info:
-        info, _ = await _fetch_video_info(video_id)
+        info, _, _ = await _fetch_video_info_with_fallback(video_id)
 
     title = (info or {}).get("title", video_id)
     duration = (info or {}).get("duration", 0)
@@ -1887,7 +1899,7 @@ def _handle_link_info(bot, accid, msg, video_id: str):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        info, error = loop.run_until_complete(_fetch_video_info(video_id))
+        info, error, _ = loop.run_until_complete(_fetch_video_info_with_fallback(video_id))
     finally:
         loop.close()
 
