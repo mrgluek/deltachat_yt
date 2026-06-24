@@ -131,7 +131,7 @@ YANDEX_PREVIEW_RE = re.compile(
 )
 
 AUDIO_ONLY_URL_RE = re.compile(
-    r'https?://(?:www\.)?(?:soundcloud\.com|music\.yandex\.(?:ru|com|by|kz))/'
+    r'https?://(?:www\.)?(?:soundcloud\.com|music\.yandex\.(?:ru|com|by|kz)|music\.youtube\.com)/'
 )
 
 def _unescape_json_string(s: str) -> str:
@@ -656,7 +656,7 @@ def _clean_error(err: str) -> str:
         return "This video is not available in the bot's country/region."
     return err
 
-async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
+async def _fetch_video_info(video_id: str, use_cookies: bool = True) -> tuple[dict | None, str | None]:
     """Fetch video metadata without downloading. Returns (info, error_msg)."""
     url = _make_yt_url(video_id)
     if "music.yandex." in url:
@@ -692,7 +692,7 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
         cmd.extend(["--proxy", active_proxy])
         
     cookies_path = os.path.join("data", "cookies.txt")
-    if os.path.exists(cookies_path):
+    if use_cookies and os.path.exists(cookies_path):
         cmd.extend(["--cookies", cookies_path])
         
     cmd.append(url)
@@ -716,7 +716,7 @@ async def _fetch_video_info(video_id: str) -> tuple[dict | None, str | None]:
         return None, str(e)
 
 
-async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None, end_time: int = None) -> tuple[str | None, dict | None, str | None]:
+async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None, end_time: int = None, use_cookies: bool = True) -> tuple[str | None, dict | None, str | None]:
     """Download video. Returns (filepath, info_dict, error_string)."""
     out_template = os.path.join(output_dir, "%(id)s_%(title).50s.%(ext)s")
     if start_time or end_time:
@@ -752,7 +752,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         cmd.extend(["--proxy", active_proxy])
         
     cookies_path = os.path.join("data", "cookies.txt")
-    if os.path.exists(cookies_path):
+    if use_cookies and os.path.exists(cookies_path):
         cmd.extend(["--cookies", cookies_path])
         
     cmd.append(url)
@@ -853,7 +853,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         return None, None, f"Error: {e}"
 
 
-async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None, end_time: int = None) -> tuple[str | None, dict | None, str | None]:
+async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None, end_time: int = None, use_cookies: bool = True) -> tuple[str | None, dict | None, str | None]:
     url = _make_yt_url(video_id)
     if "music.yandex." in url:
         token = os.getenv("YANDEX_TOKEN")
@@ -980,7 +980,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         cmd.extend(["--proxy", PROXY])
         
     cookies_path = os.path.join("data", "cookies.txt")
-    if os.path.exists(cookies_path):
+    if use_cookies and os.path.exists(cookies_path):
         cmd.extend(["--cookies", cookies_path])
         
     cmd.append(_make_yt_url(video_id))
@@ -1175,9 +1175,12 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
         # 3. Fetch info to know duration for audio strategy
         info, error = await _fetch_video_info(video_id)
         if not info:
-            _react(bot, accid, req_msg_id, "❌")
-            _send(bot, accid, chat_id, f"❌ Could not fetch video info: {error or 'Unknown error'}")
-            return
+            logger.info(f"Failed to fetch video info with cookies: {error}. Retrying without cookies...")
+            info, error = await _fetch_video_info(video_id, use_cookies=False)
+            if not info:
+                _react(bot, accid, req_msg_id, "❌")
+                _send(bot, accid, chat_id, f"❌ Could not fetch video info: {error or 'Unknown error'}")
+                return
         
         duration = int(info.get("duration", 0))
     
@@ -1234,16 +1237,17 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
 
                     if download_type == "video":
                         initial_height = 360 if effective_duration > 600 else 480
-                        filepath, info, error = await _download_video(video_id, tmpdir, max_height=initial_height, start_time=start_time, end_time=end_time)
+                        filepath, info, error = await _download_video(video_id, tmpdir, max_height=initial_height, start_time=start_time, end_time=end_time, use_cookies=(attempt == 0))
                         if initial_height == 480 and error and ("30 MB" in error or "filtered" in error.lower()):
                             logger.info(f"Retrying {video_id} with 360p because of size/filter...")
-                            filepath, info, error = await _download_video(video_id, tmpdir, max_height=360, start_time=start_time, end_time=end_time)
+                            filepath, info, error = await _download_video(video_id, tmpdir, max_height=360, start_time=start_time, end_time=end_time, use_cookies=(attempt == 0))
                     else:
-                        filepath, info, error = await _download_audio(video_id, tmpdir, duration, start_time=start_time, end_time=end_time)
+                        filepath, info, error = await _download_audio(video_id, tmpdir, duration, start_time=start_time, end_time=end_time, use_cookies=(attempt == 0))
     
                     if error:
                         last_error = error
-                        if "file not found" in error.lower() and attempt == 0:
+                        if attempt == 0:
+                            logger.info(f"First download attempt failed for {video_id}: {error}. Retrying without cookies...")
                             continue
                         _react(bot, accid, req_msg_id, "❌")
                         _send(bot, accid, chat_id, f"❌ {error}")
@@ -1252,6 +1256,7 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
                     if not filepath or not os.path.exists(filepath):
                         last_error = "Download failed: file not found"
                         if attempt == 0:
+                            logger.info(f"First download attempt file check failed for {video_id}. Retrying without cookies...")
                             continue
                         _react(bot, accid, req_msg_id, "❌")
                         _send(bot, accid, chat_id, f"❌ {last_error}")
