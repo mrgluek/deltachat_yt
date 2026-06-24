@@ -992,6 +992,15 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
 
+        if proc.returncode != 0:
+            err = stderr.decode(errors='replace').strip()
+            if "duration" in err.lower() or "filter" in err.lower():
+                return None, None, f"⏱ Audio is longer than {MAX_DURATION_AUDIO // 60} minutes"
+            
+            cleaned_err = _clean_error(err)
+            logger.warning(f"Audio download failed for {video_id}: {err}")
+            return None, None, f"yt-dlp error: {cleaned_err[:200]}"
+
         if not stdout:
             err = stderr.decode(errors='replace').strip()
             logger.warning(f"yt-dlp audio returned no stdout for {video_id}. Stderr: {err}")
