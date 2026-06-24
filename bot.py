@@ -654,6 +654,10 @@ def _clean_error(err: str) -> str:
     if "argument of type 'bool'" in err_lower:
         return "Yandex Music error: Content is unavailable (might be restricted to Russia/CIS, require a subscription, or Yandex is captcha-blocking the request)."
     if "uploader has not made this video available in your country" in err_lower:
+        m = re.search(r'(This video is available in[^\n\r]+)', err, re.IGNORECASE)
+        if m:
+            info = m.group(1).strip()
+            return f"This video is not available in the bot's country/region ({info})"
         return "This video is not available in the bot's country/region."
     return err
 

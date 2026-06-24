@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.9] - 2026-06-24
+
+### Fixed
+- **Detailed Country/Region Block Error Messages**:
+  - Enhanced error cleaning logic to parse and extract specific regional availability information from the `yt-dlp` output (e.g. "This video is available in Russian Federation.") and append it to the country block error message sent to the user.
+
 ## [1.6.8] - 2026-06-24
 
 ### Added
