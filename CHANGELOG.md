@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.7] - 2026-06-24
+
+### Added
+- **YouTube Music & Guest Fallback Enhancements**:
+  - Added `music.youtube.com` to `AUDIO_ONLY_URL_RE` so the bot hides the video download option (`/yt`) and only offers the audio download option (`/ytm`) for YouTube Music links.
+  - Implemented a self-healing automatic fallback to cookie-less (guest) downloading for both metadata fetching and audio/video downloading. If the first download attempt using configured cookies fails (e.g. due to expired cookies or PO Token blocks triggering `403 Forbidden`), the bot will dynamically retry downloading without cookies.
+  - Fixed a silent failure in `_download_audio` by validating the `yt-dlp` process return code, ensuring errors are logged and handled correctly rather than failing with a generic "file not found" message.
+
 ## [1.6.6] - 2026-06-17
 
 ### Added

@@ -10,6 +10,7 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 - **Video/Audio Trimming:** Automatically trims downloaded video and audio tracks based on start time parameters (e.g., `?t=51`, `?t=1m20s`, or `&start=80`) present in the URL, downloading and sending only the requested section.
 - **Video Downloads (`/yt`):** Downloads video in MP4 (H.264 + AAC) at **360p or 480p** (automatically uses 360p for videos over 10 minutes to stay within size limits).
 - **Audio Downloads (`/ytm`):** Extracts audio as high-quality Opus. Optimized to skip re-encoding for short clips to preserve original quality.
+- **YouTube Music Optimization:** Automatically hides the video download button (`/yt`) for `music.youtube.com` links to treat them as audio-only. Automatically retries downloads and metadata fetches in cookie-less guest mode if cookie-based attempts fail (e.g., due to PO Token blocks or expired cookies).
 - **Auto-Detection:** Automatically detects links in chat and provides download options with **video thumbnails** and estimated file sizes.
 - **Fast Commands:** Use `/yt_VIDEOID` or `/ytm_VIDEOID` (for YouTube) or `/yt URL` (generic) for quick downloads.
 - **Visual Progress:** Uses message reactions to show status:
