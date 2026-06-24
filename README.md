@@ -124,6 +124,9 @@ PROXY=socks5://user:password@ip:port
 
 # Yandex-specific proxy (Only routes Yandex Music requests through this proxy, keeping YouTube downloads fast and direct)
 YANDEX_PROXY=http://user:password@ru_proxy_ip:port
+
+# Backup proxy (Used as a fallback for YouTube/other downloads if primary connection/cookies fail)
+BACKUP_PROXY=http://user:password@backup_proxy_ip:port
 ```
 
 ## Admin Management

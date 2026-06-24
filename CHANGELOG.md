@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.8] - 2026-06-24
+
+### Added
+- **Backup Proxy Fallback Support**:
+  - Introduced the `BACKUP_PROXY` environment variable for routing download and metadata fetch requests if the default configurations fail.
+  - Generalised the download and metadata fetch retry loop into a dynamic multi-stage configuration sequence (default proxy + cookies, default proxy guest mode, backup proxy guest mode, backup proxy + cookies).
+
 ## [1.6.7] - 2026-06-24
 
 ### Added

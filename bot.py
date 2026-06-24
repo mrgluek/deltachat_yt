@@ -642,6 +642,7 @@ def _is_bot_blocked(bot, accid, msg) -> bool:
 # Proxy settings
 PROXY = os.getenv("PROXY")
 YANDEX_PROXY = os.getenv("YANDEX_PROXY")
+BACKUP_PROXY = os.getenv("BACKUP_PROXY")
 
 _active_yandex_tld = None
 
@@ -656,7 +657,7 @@ def _clean_error(err: str) -> str:
         return "This video is not available in the bot's country/region."
     return err
 
-async def _fetch_video_info(video_id: str, use_cookies: bool = True) -> tuple[dict | None, str | None]:
+async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_proxy: str = None) -> tuple[dict | None, str | None]:
     """Fetch video metadata without downloading. Returns (info, error_msg)."""
     url = _make_yt_url(video_id)
     if "music.yandex." in url:
@@ -685,8 +686,8 @@ async def _fetch_video_info(video_id: str, use_cookies: bool = True) -> tuple[di
         "--add-header", "Accept-Language: en-US,en;q=0.9",
     ]
     
-    active_proxy = PROXY
-    if "yandex." in url and YANDEX_PROXY:
+    active_proxy = custom_proxy if custom_proxy is not None else PROXY
+    if "yandex." in url and YANDEX_PROXY and custom_proxy is None:
         active_proxy = YANDEX_PROXY
     if active_proxy:
         cmd.extend(["--proxy", active_proxy])
@@ -716,7 +717,7 @@ async def _fetch_video_info(video_id: str, use_cookies: bool = True) -> tuple[di
         return None, str(e)
 
 
-async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None, end_time: int = None, use_cookies: bool = True) -> tuple[str | None, dict | None, str | None]:
+async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None) -> tuple[str | None, dict | None, str | None]:
     """Download video. Returns (filepath, info_dict, error_string)."""
     out_template = os.path.join(output_dir, "%(id)s_%(title).50s.%(ext)s")
     if start_time or end_time:
@@ -745,8 +746,8 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
     ])
     
     url = _make_yt_url(video_id)
-    active_proxy = PROXY
-    if "yandex." in url and YANDEX_PROXY:
+    active_proxy = custom_proxy if custom_proxy is not None else PROXY
+    if "yandex." in url and YANDEX_PROXY and custom_proxy is None:
         active_proxy = YANDEX_PROXY
     if active_proxy:
         cmd.extend(["--proxy", active_proxy])
@@ -853,7 +854,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         return None, None, f"Error: {e}"
 
 
-async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None, end_time: int = None, use_cookies: bool = True) -> tuple[str | None, dict | None, str | None]:
+async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None) -> tuple[str | None, dict | None, str | None]:
     url = _make_yt_url(video_id)
     if "music.yandex." in url:
         token = os.getenv("YANDEX_TOKEN")
@@ -976,8 +977,9 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
     if pp_args:
         cmd.extend(pp_args)
     
-    if PROXY:
-        cmd.extend(["--proxy", PROXY])
+    active_proxy = custom_proxy if custom_proxy is not None else PROXY
+    if active_proxy:
+        cmd.extend(["--proxy", active_proxy])
         
     cookies_path = os.path.join("data", "cookies.txt")
     if use_cookies and os.path.exists(cookies_path):
@@ -1173,14 +1175,32 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
             return
     
         # 3. Fetch info to know duration for audio strategy
-        info, error = await _fetch_video_info(video_id)
+        cookies_exist = os.path.exists(os.path.join("data", "cookies.txt"))
+        configs = []
+        configs.append({"use_cookies": True, "proxy": None, "desc": "default proxy with cookies" if cookies_exist else "default proxy without cookies"})
+        if cookies_exist:
+            configs.append({"use_cookies": False, "proxy": None, "desc": "default proxy without cookies"})
+        if BACKUP_PROXY:
+            configs.append({"use_cookies": False, "proxy": BACKUP_PROXY, "desc": "backup proxy without cookies"})
+            if cookies_exist:
+                configs.append({"use_cookies": True, "proxy": BACKUP_PROXY, "desc": "backup proxy with cookies"})
+
+        info = None
+        error = None
+        successful_config_index = 0
+        
+        for idx, cfg in enumerate(configs):
+            info, error = await _fetch_video_info(video_id, use_cookies=cfg["use_cookies"], custom_proxy=cfg["proxy"])
+            if info:
+                successful_config_index = idx
+                break
+            else:
+                logger.info(f"Failed to fetch video info using {cfg['desc']}: {error}. Trying next config...")
+
         if not info:
-            logger.info(f"Failed to fetch video info with cookies: {error}. Retrying without cookies...")
-            info, error = await _fetch_video_info(video_id, use_cookies=False)
-            if not info:
-                _react(bot, accid, req_msg_id, "❌")
-                _send(bot, accid, chat_id, f"❌ Could not fetch video info: {error or 'Unknown error'}")
-                return
+            _react(bot, accid, req_msg_id, "❌")
+            _send(bot, accid, chat_id, f"❌ Could not fetch video info: {error or 'Unknown error'}")
+            return
         
         duration = int(info.get("duration", 0))
     
@@ -1205,7 +1225,8 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
             _react(bot, accid, req_msg_id, "⏳")
     
             last_error = None
-            for attempt in range(2):
+            for idx in range(successful_config_index, len(configs)):
+                cfg = configs[idx]
                 tmpdir = tempfile.mkdtemp(prefix="ytbot_")
                 try:
                     start_time, end_time = _parse_time_param(video_id)
@@ -1237,17 +1258,30 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
 
                     if download_type == "video":
                         initial_height = 360 if effective_duration > 600 else 480
-                        filepath, info, error = await _download_video(video_id, tmpdir, max_height=initial_height, start_time=start_time, end_time=end_time, use_cookies=(attempt == 0))
+                        filepath, info, error = await _download_video(
+                            video_id, tmpdir, max_height=initial_height, 
+                            start_time=start_time, end_time=end_time, 
+                            use_cookies=cfg["use_cookies"], custom_proxy=cfg["proxy"]
+                        )
                         if initial_height == 480 and error and ("30 MB" in error or "filtered" in error.lower()):
                             logger.info(f"Retrying {video_id} with 360p because of size/filter...")
-                            filepath, info, error = await _download_video(video_id, tmpdir, max_height=360, start_time=start_time, end_time=end_time, use_cookies=(attempt == 0))
+                            filepath, info, error = await _download_video(
+                                video_id, tmpdir, max_height=360, 
+                                start_time=start_time, end_time=end_time, 
+                                use_cookies=cfg["use_cookies"], custom_proxy=cfg["proxy"]
+                            )
                     else:
-                        filepath, info, error = await _download_audio(video_id, tmpdir, duration, start_time=start_time, end_time=end_time, use_cookies=(attempt == 0))
+                        filepath, info, error = await _download_audio(
+                            video_id, tmpdir, duration, 
+                            start_time=start_time, end_time=end_time, 
+                            use_cookies=cfg["use_cookies"], custom_proxy=cfg["proxy"]
+                        )
     
                     if error:
                         last_error = error
-                        if attempt == 0:
-                            logger.info(f"First download attempt failed for {video_id}: {error}. Retrying without cookies...")
+                        logger.info(f"Download attempt using {cfg['desc']} failed for {video_id}: {error}.")
+                        if idx < len(configs) - 1:
+                            logger.info("Retrying with next configuration...")
                             continue
                         _react(bot, accid, req_msg_id, "❌")
                         _send(bot, accid, chat_id, f"❌ {error}")
@@ -1255,8 +1289,9 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     
                     if not filepath or not os.path.exists(filepath):
                         last_error = "Download failed: file not found"
-                        if attempt == 0:
-                            logger.info(f"First download attempt file check failed for {video_id}. Retrying without cookies...")
+                        logger.info(f"Download file check using {cfg['desc']} failed for {video_id}.")
+                        if idx < len(configs) - 1:
+                            logger.info("Retrying with next configuration...")
                             continue
                         _react(bot, accid, req_msg_id, "❌")
                         _send(bot, accid, chat_id, f"❌ {last_error}")

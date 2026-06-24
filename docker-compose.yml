@@ -18,6 +18,7 @@ services:
       - PROXY=${PROXY:-}
       - YANDEX_PROXY=${YANDEX_PROXY:-}
       - YANDEX_TOKEN=${YANDEX_TOKEN:-}
+      - BACKUP_PROXY=${BACKUP_PROXY:-}
     deploy:
       resources:
         limits:
