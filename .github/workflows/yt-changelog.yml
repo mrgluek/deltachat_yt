@@ -1,0 +1,16 @@
+name: Notify YT Bot Changelog
+on: [push]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    container:
+      image: curlimages/curl:latest
+    steps:
+      - name: Send notification
+        run: |
+          curl -H "Title: ${{ github.event.head_commit.message }}" \
+               -H "Tags: robot,tv" \
+               -d "Author: ${{ github.actor }}
+               Link: ${{ github.event.head_commit.url }}" \
+               https://ntfy.gluek.info/yt_changelog
