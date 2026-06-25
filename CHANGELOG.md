@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.12] - 2026-06-25
+
+### Changed
+- **Bidirectional Suffix Matching:** Suffix matching is now bidirectional (e.g. `@y` or `@ytbot` will match YT bot).
+- **Smart Group Chat Command Filtering:** The bot now automatically ignores unaddressed general `/help` and `/stats` commands in group chats if other bots are present in the chat.
+
 ## [1.6.11] - 2026-06-25
 
 ### Added
