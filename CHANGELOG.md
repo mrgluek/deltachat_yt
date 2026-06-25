@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.11] - 2026-06-25
+
+### Added
+- **Target-Specific Command Suffixes:** Added support for addressing this bot specifically in group chats using the `/command@yt` suffix.
+
 ## [1.6.10] - 2026-06-24
 
 ### Fixed

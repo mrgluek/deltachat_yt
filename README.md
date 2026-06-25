@@ -46,6 +46,12 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 - `/setprimary <addr>` - Switch the primary mail relay (Admin only).
 - `/resilient` - Toggle resilient sending mode across all relays (Admin only).
 
+### Target-Specific Commands in Group Chats
+
+In group chats where multiple bots are present, you can address this bot specifically to prevent other bots from responding. Append the `@yt` suffix to any command, for example:
+- `/help@yt`
+- `/stats@yt`
+
 ## Deployment
 
 ### Prerequisites
