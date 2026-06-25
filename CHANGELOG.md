@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.13] - 2026-06-25
+
+### Changed
+- **Compact Preview Format:** Simplified the layout of video/audio information and command buttons, combining the title and the URL into a single Markdown link, and aligning download command options side-by-side.
+
 ## [1.6.12] - 2026-06-25
 
 ### Changed

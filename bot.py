@@ -2050,28 +2050,22 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
     
     video_url = _make_yt_url(video_id)
 
-    video_btn = f"[ 📼 {target_height}p ({video_size_str}) {vid_cmd} ]" if can_video else f"[ 📼 Too long (> {MAX_DURATION_VIDEO // 60}m) ]"
-    audio_btn = f"[ 💿 {audio_fmt} ({audio_size_str}) {aud_cmd} ]" if can_audio else f"[ 💿 Too long (> {MAX_DURATION_AUDIO // 60}m) ]"
+    video_btn = f"📼 {target_height}p ({video_size_str}) {vid_cmd}" if can_video else f"📼 Too long (> {MAX_DURATION_VIDEO // 60}m)"
+    audio_btn = f"💿 {audio_fmt} ({audio_size_str}) {aud_cmd}" if can_audio else f"💿 Too long (> {MAX_DURATION_AUDIO // 60}m)"
 
     is_audio_only = bool(AUDIO_ONLY_URL_RE.search(video_url))
 
     if is_audio_only:
         lines = [
-            f"🎵 Audio: \"{title}\" ({dur_str})",
+            f"🎵 [Audio: \"{title}\" ({dur_str})]({video_url})",
             "",
-            f"🔗 {video_url}",
-            "",
-            f"{audio_btn}"
+            audio_btn
         ]
     else:
         lines = [
-            f"📺 Video: \"{title}\" ({dur_str})",
+            f"📺 [Video: \"{title}\" ({dur_str})]({video_url})",
             "",
-            f"🔗 {video_url}",
-            "",
-            f"{video_btn}",
-            "",
-            f"{audio_btn}"
+            f"{video_btn}   {audio_btn}"
         ]
 
     _send(bot, accid, msg.chat_id, "\n".join(lines), file=thumb_path)
