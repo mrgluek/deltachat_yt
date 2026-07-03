@@ -2,6 +2,7 @@ services:
   yt_bot:
     container_name: deltachat_yt_bot
     build: .
+    init: true
     restart: always
     logging:
       driver: json-file

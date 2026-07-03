@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.14] - 2026-07-03
+
+### Fixed
+- **Zombie Process Reaping:** Enabled `init: true` in Docker Compose to automatically reap zombie processes (like those from `yt-dlp` or RPC calls) in the bot container, preventing PID limit exhaustion.
+
 ## [1.6.13] - 2026-06-25
 
 ### Changed
