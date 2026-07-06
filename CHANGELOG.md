@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.15] - 2026-07-06
+
+### Fixed
+- **Fix Dependency Conflict/NameError:** Pinned `deltachat2[full]<1.0.0` to avoid NameError/ImportError bugs in newer incompatible `deltachat2` versions.
+
 ## [1.6.14] - 2026-07-03
 
 ### Fixed
