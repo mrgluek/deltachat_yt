@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [1.6.15] - 2026-07-06
 
 ### Fixed
-- **Fix Dependency Conflict/NameError:** Pinned `deltachat2[full]<1.0.0` to avoid NameError/ImportError bugs in newer incompatible `deltachat2` versions.
+- **Fix Dependency Conflict/NameError:** Pinned `deltabot-cli==8.1.2` and `deltachat2[full]<1.0.0` in `requirements.txt` to resolve dependency conflicts and avoid the `ChatType` NameError/ImportError bugs introduced in newer, incompatible versions of `deltachat2`.
 
 ## [1.6.14] - 2026-07-03
 
