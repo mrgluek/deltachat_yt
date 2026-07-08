@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.16] - 2026-07-08
+
+### Fixed
+- **Fix Incomplete/Partial Download Delivery:** Prevented the bot from matching and delivering unfinished `.part`, `.ytdl`, or `.temp` files.
+- **Robust Size Limit Detection:** Correctly detects when `yt-dlp` aborts downloads due to the `--max-filesize` limit (even when returning exit code 0 under `--print-json`) and responds with a descriptive size limit warning instead of sending a partial file or failing with "file not found".
+
 ## [1.6.15] - 2026-07-06
 
 ### Fixed

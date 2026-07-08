@@ -600,6 +600,10 @@ def _find_file_in_dir(directory: str, extensions: list[str] = None, prefix: str 
         if not os.path.isfile(fpath):
             continue
         
+        # Exclude known incomplete download extensions
+        if f.lower().endswith('.part') or f.lower().endswith('.ytdl') or f.lower().endswith('.temp'):
+            continue
+            
         match_ext = not extensions or any(f.lower().endswith(ext.lower()) for ext in extensions)
         match_prefix = not prefix or f.lower().startswith(prefix.lower())
         
@@ -610,8 +614,12 @@ def _find_file_in_dir(directory: str, extensions: list[str] = None, prefix: str 
         # Fallback: ignore extensions if we have a prefix and no match found
         for f in os.listdir(directory):
             fpath = os.path.join(directory, f)
-            if os.path.isfile(fpath) and f.lower().startswith(prefix.lower()):
-                candidates.append(fpath)
+            if os.path.isfile(fpath):
+                # Exclude known incomplete download extensions
+                if f.lower().endswith('.part') or f.lower().endswith('.ytdl') or f.lower().endswith('.temp'):
+                    continue
+                if f.lower().startswith(prefix.lower()):
+                    candidates.append(fpath)
                 
     if not candidates:
         return None
@@ -875,6 +883,17 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
                 return None, info, "📦 Video exceeds 30 MB size limit"
             return filepath, info, None
         
+        # Check if there is a partial file indicating a size limit abort
+        search_prefix = video_id
+        if video_id.startswith("http://") or video_id.startswith("https://"):
+            m = YT_URL_RE.search(video_id)
+            search_prefix = m.group(1) if m else None
+        
+        if search_prefix:
+            for f in os.listdir(output_dir):
+                if f.lower().startswith(search_prefix.lower()) and (f.lower().endswith('.part') or f.lower().endswith('.ytdl')):
+                    return None, info, "📦 Video exceeds 30 MB size limit"
+        
         logger.error(f"Video file not found for {video_id}. Expected: {filepath}. Dir contents: {os.listdir(output_dir)}")
         return None, info, "Download completed but file not found"
     except asyncio.TimeoutError:
@@ -1100,6 +1119,11 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 os.remove(filepath)
                 return None, info, "📦 Audio file exceeds 30 MB"
             return filepath, info, None
+        
+        # Check if there is a partial file indicating a size limit abort
+        for f in os.listdir(output_dir):
+            if f.lower().startswith(safe_id.lower()) and (f.lower().endswith('.part') or f.lower().endswith('.ytdl')):
+                return None, info, "📦 Audio file exceeds 30 MB"
         
         logger.error(f"Audio file not found for {video_id}. Expected: {filepath}. Dir contents: {os.listdir(output_dir)}")
         return None, info, "Download completed but file not found"
