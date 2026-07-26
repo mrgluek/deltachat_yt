@@ -92,6 +92,11 @@ def get_download_lock(key: str):
 # Max duration in seconds
 MAX_DURATION_VIDEO = 1800  # 30 minutes
 MAX_DURATION_AUDIO = 3600  # 60 minutes
+CHUNK_DURATION_VIDEO = 600  # 10 minutes (600 seconds)
+
+# Max file size limit
+MAX_FILESIZE_MB = 50
+MAX_FILESIZE_BYTES = MAX_FILESIZE_MB * 1024 * 1024
 
 # YouTube URL patterns
 YT_URL_RE = re.compile(
@@ -813,7 +818,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "-f", f"bv[height<={max_height}]+ba/b[height<={max_height}]/b",
     ]
     if not start_time and not end_time:
-        cmd.extend(["--max-filesize", "30M"])
+        cmd.extend(["--max-filesize", f"{MAX_FILESIZE_MB}M"])
     cmd.extend([
         "--merge-output-format", "mp4",
         "--no-warnings",
@@ -851,7 +856,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
             if "duration" in err.lower() or "filter" in err.lower():
                 return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
             if "max-filesize" in err.lower() or "filesize" in err.lower() or "requested format" in err.lower() or "not available" in err.lower():
-                return None, None, "📦 Video exceeds 30 MB size limit"
+                return None, None, f"📦 Video exceeds {MAX_FILESIZE_MB} MB size limit"
             
             cleaned_err = _clean_error(err)
             logger.warning(f"Download failed for {video_id}: {err}")
@@ -862,7 +867,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
             logger.warning(f"yt-dlp video returned no stdout for {video_id}. Stderr: {err}")
             
             if "filesize" in err.lower():
-                return None, None, "📦 Video exceeds 30 MB size limit"
+                return None, None, f"📦 Video exceeds {MAX_FILESIZE_MB} MB size limit"
             if "duration" in err.lower():
                 return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
             
@@ -916,9 +921,9 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
                     logger.error(f"Error during local ffmpeg video trim: {e}")
 
             size = os.path.getsize(filepath)
-            if size > 30 * 1024 * 1024:
+            if size > MAX_FILESIZE_BYTES:
                 os.remove(filepath)
-                return None, info, "📦 Video exceeds 30 MB size limit"
+                return None, info, f"📦 Video exceeds {MAX_FILESIZE_MB} MB size limit"
             return filepath, info, None
         
         # Check if there is a partial file indicating a size limit abort
@@ -930,7 +935,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         if search_prefix:
             for f in os.listdir(output_dir):
                 if f.lower().startswith(search_prefix.lower()) and (f.lower().endswith('.part') or f.lower().endswith('.ytdl')):
-                    return None, info, "📦 Video exceeds 30 MB size limit"
+                    return None, info, f"📦 Video exceeds {MAX_FILESIZE_MB} MB size limit"
         
         logger.error(f"Video file not found for {video_id}. Expected: {filepath}. Dir contents: {os.listdir(output_dir)}")
         return None, info, "Download completed but file not found"
@@ -1153,15 +1158,15 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                     logger.error(f"Error during local ffmpeg audio trim: {e}")
 
             size = os.path.getsize(filepath)
-            if size > 30 * 1024 * 1024:
+            if size > MAX_FILESIZE_BYTES:
                 os.remove(filepath)
-                return None, info, "📦 Audio file exceeds 30 MB"
+                return None, info, f"📦 Audio file exceeds {MAX_FILESIZE_MB} MB"
             return filepath, info, None
         
         # Check if there is a partial file indicating a size limit abort
         for f in os.listdir(output_dir):
             if f.lower().startswith(safe_id.lower()) and (f.lower().endswith('.part') or f.lower().endswith('.ytdl')):
-                return None, info, "📦 Audio file exceeds 30 MB"
+                return None, info, f"📦 Audio file exceeds {MAX_FILESIZE_MB} MB"
         
         logger.error(f"Audio file not found for {video_id}. Expected: {filepath}. Dir contents: {os.listdir(output_dir)}")
         return None, info, "Download completed but file not found"
@@ -1349,19 +1354,19 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
                             if filepath and os.path.exists(filepath):
                                 break
                             
-                            is_size_or_format_err = error and any(term in error.lower() for term in ["30 mb", "filtered", "not available", "format"])
+                            is_size_or_format_err = error and any(term in error.lower() for term in [f"{MAX_FILESIZE_MB} mb", "30 mb", "filtered", "not available", "format"])
                             if is_size_or_format_err:
                                 logger.info(f"Retrying {video_id} with lower resolution than {h}p because of size/format limit ({error})...")
                                 continue
                             else:
                                 break
                         
-                        if error and any(term in error.lower() for term in ["30 mb", "filtered", "not available", "format"]):
+                        if error and any(term in error.lower() for term in [f"{MAX_FILESIZE_MB} mb", "30 mb", "filtered", "not available", "format"]):
                             short_id = video_id
                             if video_id.startswith("http://") or video_id.startswith("https://"):
                                 m = YT_URL_RE.search(video_id)
                                 short_id = m.group(1) if m else video_id
-                            error = f"📦 Video exceeds 30 MB size limit even at lower resolutions. Try audio instead: /ytm_{short_id}"
+                            error = f"📦 Video exceeds {MAX_FILESIZE_MB} MB size limit even at lower resolutions. Try audio instead: /ytm_{short_id}"
                     else:
                         filepath, info, error = await _download_audio(
                             video_id, tmpdir, duration, 
@@ -1853,15 +1858,15 @@ def _get_help_text(bot, accid, from_id):
         f"👋 Hi {sender_email}!\n\n"
         f"I download YouTube videos and audio.\n\n"
         f"**Commands:**\n"
-        f"/yt <url> — Download video (MP4 360-480p, ≤30MB)\n"
+        f"/yt <url> — Download video (MP4 360-480p, ≤{MAX_FILESIZE_MB}MB)\n"
         f"/yt_<video_id> — Download video by ID\n"
-        f"/ytm <url> — Download audio (Opus 128kbps stereo < 10 min, 64kbps mono >= 10 min, ≤30MB)\n"
+        f"/ytm <url> — Download audio (Opus 128kbps stereo < 10 min, 64kbps mono >= 10 min, ≤{MAX_FILESIZE_MB}MB)\n"
         f"/ytm_<video_id> — Download audio by ID\n"
         f"/stats — Download statistics\n"
         f"/donate — Support development ❤️\n"
         f"/help — This message\n\n"
         f"💡 _You can also just paste a YouTube link and I'll show you download options._\n\n"
-        f"⏱ Max duration: video {MAX_DURATION_VIDEO // 60}m, audio {MAX_DURATION_AUDIO // 60}m | Max file: 30 MB\n"
+        f"⏱ Max duration: video {MAX_DURATION_VIDEO // 60}m, audio {MAX_DURATION_AUDIO // 60}m | Max file: {MAX_FILESIZE_MB} MB\n"
     )
 
     admin_email = database.get_config("admin_dc_email")
@@ -2137,7 +2142,7 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
             rate = 0.035 if target_height == 360 else 0.06
             video_mb = duration * rate
             
-        video_size_str = f"~{min(video_mb, 30.0):.1f} MB"
+        video_size_str = f"~{min(video_mb, float(MAX_FILESIZE_MB)):.1f} MB"
 
     video_url = _make_yt_url(video_id)
 

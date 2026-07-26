@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.19] - 2026-07-27
+
+### Changed
+- **Increased File Size Limit to 50 MB:** Raised maximum file size limit from 30 MB to 50 MB (`MAX_FILESIZE_MB = 50`) to provide extra headroom for high-bitrate 10-minute video chunks and prevent size limit aborts due to encoding variance.
+
 ## [1.6.18] - 2026-07-27
 
 ### Added
