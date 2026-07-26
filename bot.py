@@ -1421,7 +1421,8 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
     title = (info or {}).get("title", video_id)
     total_duration = (info or {}).get("duration", 0)
     duration = total_duration
-    start_time, end_time = _parse_time_param(video_id)
+    full_url = _extract_video_id(video_id) or video_id
+    start_time, end_time = _parse_time_param(full_url)
     if duration:
         if start_time:
             if end_time:
@@ -1435,6 +1436,7 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
     size_str = _format_size(filesize)
 
     ext = os.path.splitext(filepath)[1].lower().replace(".", "").upper()
+    clean_base = _get_base_video_id(video_id)
     if download_type == "video":
         chunk_s = start_time or 0
         chunk_e = end_time if end_time else (chunk_s + int(duration or 0))
@@ -1444,7 +1446,7 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
             range_str = _format_time_range(chunk_s, chunk_e)
             range_suffix = f" [{range_str}]"
             
-        caption = f"📺 {title}{range_suffix} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(video_id)}"
+        caption = f"📺 {title}{range_suffix} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
         
         # Check if there is a next chunk to offer
         if total_duration and total_duration > chunk_e:
@@ -2136,6 +2138,8 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
             video_mb = duration * rate
             
         video_size_str = f"~{min(video_mb, 30.0):.1f} MB"
+
+    video_url = _make_yt_url(video_id)
 
     if video_id.startswith("http://") or video_id.startswith("https://"):
         short_id = _get_cache_id(video_id)
