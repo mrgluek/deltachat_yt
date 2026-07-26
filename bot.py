@@ -356,44 +356,67 @@ def _extract_video_id(text: str) -> str | None:
     """Extract YouTube video ID or recognize supported full URLs / short hashes.
     
     This function handles both raw IDs/URLs and full command strings 
-    (e.g. '/yt_ID' or '/yt URL') by using non-anchored searches.
+    (e.g. '/yt_ID', '/yt_ID_0_600', or '/yt URL') by using non-anchored searches.
     """
     text = text.strip()
     
-    # 0. Check if it's a short hash for a full URL (stored in database)
-    # We look for a 16-char hex hash at the end of the string, preceded by _ or space
+    # 0. Check underscore range suffix: e.g. ID_START_END (3RBNboYUlVI_600_1200 or 3RBNboYUlVI_0_600)
+    m_range = re.search(r'(?:^|[_ ])([a-zA-Z0-9_-]{11,16})_(\d+)_(\d+)$', text)
+    if m_range:
+        base_id = m_range.group(1)
+        start_sec = m_range.group(2)
+        end_sec = m_range.group(3)
+        resolved_base = database.resolve_url(base_id) if len(base_id) == 16 else None
+        if resolved_base:
+            sep = "&" if "?" in resolved_base else "?"
+            return f"{resolved_base}{sep}start={start_sec}&end={end_sec}"
+        return f"https://youtu.be/{base_id}?start={start_sec}&end={end_sec}"
+
+    # Check query params attached to raw ID
+    if ('?' in text or '&' in text) and not text.startswith("http://") and not text.startswith("https://"):
+        parts = text.split('?', 1)
+        base_id = parts[0].strip()
+        query_part = '?' + parts[1] if len(parts) > 1 else ''
+        m_base = re.search(r'(?:^|[_ ])([a-zA-Z0-9_-]{11,16})$', base_id)
+        if m_base:
+            target_id = m_base.group(1)
+            resolved_base = database.resolve_url(target_id) if len(target_id) == 16 else None
+            if resolved_base:
+                sep = "&" if "?" in resolved_base else "?"
+                return f"{resolved_base}{sep}{parts[1]}"
+            return f"https://youtu.be/{target_id}{query_part}"
+
+    # 1. Check if it's a short hash for a full URL (stored in database)
     m_hash = re.search(r'(?:^|[_ ])([a-f0-9]{16})$', text)
     if m_hash:
         resolved = database.resolve_url(m_hash.group(1))
         if resolved:
             return resolved
         
-    # 1. Supported non-YouTube URLs: Return the FULL URL
+    # 2. Supported non-YouTube URLs: Return the FULL URL
     m_supported = SUPPORTED_URL_RE.search(text)
     if m_supported:
         return m_supported.group(0)
         
-    # 2. YouTube URL -> 11-char ID (unless it has a time parameter)
+    # 3. YouTube URL -> 11-char ID (unless it has a time parameter)
     m_yt = YT_URL_RE.search(text)
     if m_yt:
-        if 't=' in text or 'start=' in text:
+        if 't=' in text or 'start=' in text or 'end=' in text:
             m_any_url = re.search(r'https?://[^\s]+', text)
             if m_any_url:
                 return m_any_url.group(0)
         return m_yt.group(1)
         
-    # 3. Direct YouTube 11-char ID or generic 11-16 char ID
-    # Matches IDs at the end of the string, preceded by start of string, space, or underscore.
+    # 4. Direct YouTube 11-char ID or generic 11-16 char ID
     m_id = re.search(r'(?:^|[_ ])([a-zA-Z0-9_-]{11,16})$', text)
     if m_id:
-        # Extra check: if it's 16 chars, it might be a hash we missed in step 0
         if len(m_id.group(1)) == 16:
             resolved = database.resolve_url(m_id.group(1))
             if resolved:
                 return resolved
         return m_id.group(1)
         
-    # 4. Fallback: if there's an http link anywhere, return it
+    # 5. Fallback: if there's an http link anywhere, return it
     if "http://" in text or "https://" in text:
         m_any_url = re.search(r'https?://[^\s]+', text)
         if m_any_url:
@@ -409,7 +432,24 @@ def _format_duration(seconds: int) -> str:
     h, m = divmod(m, 60)
     if h:
         return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def _format_time_range(start_sec: int, end_sec: int) -> str:
+    return f"{_format_duration(start_sec)}-{_format_duration(end_sec)}"
+
+
+def _get_base_video_id(video_id: str) -> str:
+    """Extract clean video ID or short hash without query string or time range parameters."""
+    base = video_id.split('?')[0].split('&')[0]
+    m_range = re.match(r'^([a-zA-Z0-9_-]{11,16})_\d+_\d+$', base)
+    if m_range:
+        base = m_range.group(1)
+    m_yt = YT_URL_RE.search(base)
+    if m_yt:
+        return m_yt.group(1)
+    return base
+
 
 
 def _format_size(size_bytes: int) -> str:
@@ -1379,7 +1419,8 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
         info, _, _ = await _fetch_video_info_with_fallback(video_id)
 
     title = (info or {}).get("title", video_id)
-    duration = (info or {}).get("duration", 0)
+    total_duration = (info or {}).get("duration", 0)
+    duration = total_duration
     start_time, end_time = _parse_time_param(video_id)
     if duration:
         if start_time:
@@ -1395,7 +1436,31 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
 
     ext = os.path.splitext(filepath)[1].lower().replace(".", "").upper()
     if download_type == "video":
-        caption = f"📺 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(video_id)}"
+        chunk_s = start_time or 0
+        chunk_e = end_time if end_time else (chunk_s + int(duration or 0))
+        
+        range_suffix = ""
+        if start_time is not None or end_time is not None or (total_duration and total_duration > 600):
+            range_str = _format_time_range(chunk_s, chunk_e)
+            range_suffix = f" [{range_str}]"
+            
+        caption = f"📺 {title}{range_suffix} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(video_id)}"
+        
+        # Check if there is a next chunk to offer
+        if total_duration and total_duration > chunk_e:
+            next_s = chunk_e
+            next_e = min(total_duration, next_s + 600)
+            next_range_str = _format_time_range(next_s, next_e)
+            
+            clean_base = _get_base_video_id(video_id)
+            if clean_base.startswith("http://") or clean_base.startswith("https://"):
+                short_id = _get_cache_id(clean_base)
+                database.add_url_mapping(short_id, clean_base)
+            else:
+                short_id = clean_base
+                
+            next_cmd = f"/yt_{short_id}_{next_s}_{next_e}"
+            caption += f"\n\n▶️ Next chunk ({next_range_str}): {next_cmd}"
     else:
         caption = f"🎵 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(video_id)}"
 
@@ -2072,21 +2137,28 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
             
         video_size_str = f"~{min(video_mb, 30.0):.1f} MB"
 
-    can_video = duration <= MAX_DURATION_VIDEO
-    can_audio = duration <= MAX_DURATION_AUDIO
-
     if video_id.startswith("http://") or video_id.startswith("https://"):
         short_id = _get_cache_id(video_id)
         database.add_url_mapping(short_id, video_id)
-        vid_cmd = f"/yt_{short_id}"
-        aud_cmd = f"/ytm_{short_id}"
     else:
-        vid_cmd = f"/yt_{video_id}"
-        aud_cmd = f"/ytm_{video_id}"
-    
-    video_url = _make_yt_url(video_id)
+        short_id = video_id
 
-    video_btn = f"📼 {target_height}p ({video_size_str}) {vid_cmd}" if can_video else f"📼 Too long (> {MAX_DURATION_VIDEO // 60}m)"
+    aud_cmd = f"/ytm_{short_id}"
+
+    if original_duration > 600:
+        chunk_s = start_time or 0
+        chunk_e = min(original_duration, chunk_s + 600)
+        part_num = (chunk_s // 600) + 1
+        range_label = _format_time_range(chunk_s, chunk_e)
+        vid_cmd = f"/yt_{short_id}_{chunk_s}_{chunk_e}"
+        part_prefix = f"Part {part_num} " if part_num > 1 or original_duration > 600 else ""
+        video_btn = f"📼 {part_prefix}({range_label}) {vid_cmd}"
+    else:
+        vid_cmd = f"/yt_{short_id}"
+        can_video = duration <= MAX_DURATION_VIDEO
+        video_btn = f"📼 {target_height}p ({video_size_str}) {vid_cmd}" if can_video else f"📼 Too long (> {MAX_DURATION_VIDEO // 60}m)"
+
+    can_audio = duration <= MAX_DURATION_AUDIO
     audio_btn = f"💿 {audio_fmt} ({audio_size_str}) {aud_cmd}" if can_audio else f"💿 Too long (> {MAX_DURATION_AUDIO // 60}m)"
 
     is_audio_only = bool(AUDIO_ONLY_URL_RE.search(video_url))

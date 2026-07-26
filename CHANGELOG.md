@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.18] - 2026-07-27
+
+### Added
+- **Automatic 10-Minute Video Chunking (`/yt_ID_0_600`):** Videos longer than 10 minutes are automatically offered in 10-minute segments (00:00–10:00, 10:00–20:00, etc.) using clean, 100% clickable Delta Chat command links (`/yt_ID_START_END`).
+- **Sequential Next Chunk Delivery Links:** Delivered video chunk captions automatically include a clickable `▶️ Next chunk (start-end): /yt_ID_START_END` command link to fetch subsequent parts seamlessly until the end of the video.
+
 ## [1.6.17] - 2026-07-26
 
 ### Fixed
