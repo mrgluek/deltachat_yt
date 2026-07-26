@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.17] - 2026-07-26
+
+### Fixed
+- **Fix `Requested format is not available` Error:** Removed hardcoded `player_client=android,web` extractor argument that caused YouTube's SABR experiment to hide adaptive DASH streams and fail on videos like `ssmQkRkXE84`.
+- **Flexible Format Selection & Multi-Resolution Fallback:** Updated format selector to `bv[height<={max_height}]+ba/b[height<={max_height}]/b` with `--merge-output-format mp4` and implemented automatic step-down resolution fallback (`480p` ➔ `360p` ➔ `240p` ➔ `144p`) when file sizes exceed limits or formats are filtered out.
+- **Informative Size Limit Feedback:** Suggests downloading the audio version (`/ytm_<id>`) if even 144p resolution exceeds 30 MB.
+
 ## [1.6.16] - 2026-07-08
 
 ### Fixed

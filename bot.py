@@ -691,7 +691,6 @@ async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_prox
     cmd = [
         "yt-dlp", "--no-playlist", "--dump-json", "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--extractor-args", "youtube:player_client=android,web",
         "--js-runtimes", "deno:/root/.deno/bin/deno",
         "--no-cache-dir",
         "--no-config",
@@ -771,7 +770,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "yt-dlp",
         "--no-playlist",
         "--match-filter", f"duration<={max_duration}",
-        "-f", f"b[ext=mp4][height<={max_height}]/bv[ext=mp4][height<={max_height}]+ba[ext=m4a]/b[height<={max_height}]/b",
+        "-f", f"bv[height<={max_height}]+ba/b[height<={max_height}]/b",
     ]
     if not start_time and not end_time:
         cmd.extend(["--max-filesize", "30M"])
@@ -779,7 +778,6 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "--merge-output-format", "mp4",
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--extractor-args", "youtube:player_client=android,web",
         "--js-runtimes", "deno:/root/.deno/bin/deno",
         "--no-cache-dir",
         "--no-config",
@@ -812,7 +810,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
             err = stderr.decode(errors='replace').strip()
             if "duration" in err.lower() or "filter" in err.lower():
                 return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
-            if "max-filesize" in err.lower() or "filesize" in err.lower():
+            if "max-filesize" in err.lower() or "filesize" in err.lower() or "requested format" in err.lower() or "not available" in err.lower():
                 return None, None, "📦 Video exceeds 30 MB size limit"
             
             cleaned_err = _clean_error(err)
@@ -1298,18 +1296,32 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
 
                     if download_type == "video":
                         initial_height = 360 if effective_duration > 600 else 480
-                        filepath, info, error = await _download_video(
-                            video_id, tmpdir, max_height=initial_height, 
-                            start_time=start_time, end_time=end_time, 
-                            use_cookies=cfg["use_cookies"], custom_proxy=cfg["proxy"]
-                        )
-                        if initial_height == 480 and error and ("30 MB" in error or "filtered" in error.lower()):
-                            logger.info(f"Retrying {video_id} with 360p because of size/filter...")
+                        heights_to_try = [480, 360, 240, 144] if initial_height == 480 else [360, 240, 144]
+                        filepath = None
+                        info = None
+                        error = None
+                        for h in heights_to_try:
                             filepath, info, error = await _download_video(
-                                video_id, tmpdir, max_height=360, 
+                                video_id, tmpdir, max_height=h, 
                                 start_time=start_time, end_time=end_time, 
                                 use_cookies=cfg["use_cookies"], custom_proxy=cfg["proxy"]
                             )
+                            if filepath and os.path.exists(filepath):
+                                break
+                            
+                            is_size_or_format_err = error and any(term in error.lower() for term in ["30 mb", "filtered", "not available", "format"])
+                            if is_size_or_format_err:
+                                logger.info(f"Retrying {video_id} with lower resolution than {h}p because of size/format limit ({error})...")
+                                continue
+                            else:
+                                break
+                        
+                        if error and any(term in error.lower() for term in ["30 mb", "filtered", "not available", "format"]):
+                            short_id = video_id
+                            if video_id.startswith("http://") or video_id.startswith("https://"):
+                                m = YT_URL_RE.search(video_id)
+                                short_id = m.group(1) if m else video_id
+                            error = f"📦 Video exceeds 30 MB size limit even at lower resolutions. Try audio instead: /ytm_{short_id}"
                     else:
                         filepath, info, error = await _download_audio(
                             video_id, tmpdir, duration, 
