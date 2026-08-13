@@ -10,6 +10,7 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 - **Video/Audio Trimming:** Automatically trims downloaded video and audio tracks based on start time parameters (e.g., `?t=51`, `?t=1m20s`, or `&start=80`) present in the URL, downloading and sending only the requested section.
 - **Video Downloads & Automatic Chunking (`/yt`):** Downloads video in MP4 with automatic multi-resolution fallback. Videos longer than 10 minutes are automatically offered in 10-minute chunks (`/yt_ID_0_600`) to guarantee delivery within 50 MB size limits, with clickable `▶️ Next chunk` links included in each delivered file's caption.
 - **Audio Downloads (`/ytm`):** Extracts audio as high-quality Opus with embedded metadata tags (Title, Artist, Album, Cover Art) and the original video URL embedded in the file's description/comment metadata tag. Optimized to skip re-encoding for short clips to preserve original quality.
+- **Navidrome / Subsonic Integration (`/ytms`):** Admin command to save downloaded tagged audio directly into a Navidrome music directory and immediately trigger a Subsonic REST API library scan (`startScan.view`).
 - **YouTube Music Optimization:** Automatically hides the video download button (`/yt`) for `music.youtube.com` links to treat them as audio-only. Automatically retries downloads and metadata fetches in cookie-less guest mode if cookie-based attempts fail (e.g., due to PO Token blocks or expired cookies).
 - **Auto-Detection:** Automatically detects links in chat and provides download options with **video thumbnails** and estimated file sizes.
 - **Fast Commands:** Use `/yt_VIDEOID` or `/ytm_VIDEOID` (for YouTube) or `/yt URL` (generic) for quick downloads.
@@ -36,6 +37,8 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 - `/yt_<video_id>` - Download video by ID.
 - `/ytm <url>` - Download audio from URL.
 - `/ytm_<video_id>` - Download audio by ID.
+- `/ytms <url>` - Save audio to Navidrome library via Subsonic API (Admin only).
+- `/ytms_<video_id>` - Save audio to Navidrome by ID (Admin only).
 - `/stats` - View bot usage statistics.
 - `/help` - Show help message.
 - `/initadmin` - Claim bot ownership (first time setup).
@@ -133,6 +136,49 @@ YANDEX_PROXY=http://user:password@ru_proxy_ip:port
 
 # Backup proxy (Used as a fallback for YouTube/other downloads if primary connection/cookies fail)
 BACKUP_PROXY=http://user:password@backup_proxy_ip:port
+```
+
+## Navidrome / Subsonic Integration (`/ytms`)
+
+The bot can save downloaded audio tracks (with all embedded tags and cover art) directly into your Navidrome music library and automatically trigger an instant library scan via the Subsonic REST API.
+
+### 1. Configuration (`.env`)
+
+Add your Navidrome connection details to `.env`:
+
+```env
+# Navidrome / Subsonic Server URL
+NAVIDROME_URL=https://music.example.com
+
+# Navidrome User & Password
+NAVIDROME_USER=admin
+NAVIDROME_PASSWORD=your_navidrome_password
+
+# Target Music Folder inside the container (default: /music)
+NAVIDROME_MUSIC_DIR=/music
+```
+
+### 2. Music Directory Mount (`docker-compose.override.yml`)
+
+To mount your host's Navidrome music directory into the bot container without editing the tracked `docker-compose.yml`, copy the example override file:
+
+```bash
+cp docker-compose.override.yml.example docker-compose.override.yml
+```
+
+Edit `docker-compose.override.yml` to specify your music path:
+
+```yaml
+services:
+  yt_bot:
+    volumes:
+      - /path/to/navidrome/music:/music
+```
+
+Then restart the container:
+
+```bash
+docker compose up -d
 ```
 
 ## Admin Management

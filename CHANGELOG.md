@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.21] - 2026-08-13
+
+### Added
+- **Navidrome / Subsonic Integration (`/ytms`):** Added administrator command `/ytms <url>` and `/ytms_<id>` to save downloaded tagged audio files directly into the Navidrome music directory organized as `<Artist>/<Album>/<Track Title>.<ext>`.
+- **Subsonic REST API Library Scan:** Automatically triggers Navidrome to scan its music library immediately after saving new files via `/rest/startScan.view` using token+salt MD5 authentication.
+- **Link Preview Navidrome Button:** Adds a 1-tap `💾 /ytms_<id>` button to link preview messages for bot administrators.
+- **Docker Compose Override Example:** Added `docker-compose.override.yml.example` to easily mount host music directories into the container.
+
 ## [1.6.20] - 2026-08-13
 
 ### Added

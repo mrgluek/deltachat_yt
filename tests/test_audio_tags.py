@@ -3,9 +3,29 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-# Ensure deltachat2 and deltabot_cli can be imported even if not installed in CI environment
-sys.modules.setdefault('deltachat2', MagicMock())
-sys.modules.setdefault('deltabot_cli', MagicMock())
+# Mock deltabot_cli and deltachat2 if not installed
+try:
+    import deltachat2
+except ImportError:
+    sys.modules['deltachat2'] = MagicMock()
+
+try:
+    import deltabot_cli
+except ImportError:
+    class MockBotCli:
+        def __init__(self, *args, **kwargs):
+            pass
+        def on(self, *args, **kwargs):
+            return lambda func: func
+        def on_init(self, func):
+            return func
+        def on_start(self, func):
+            return func
+        def start(self):
+            pass
+    mock_deltabot_cli = MagicMock()
+    mock_deltabot_cli.BotCli = MockBotCli
+    sys.modules['deltabot_cli'] = mock_deltabot_cli
 
 # Import database and bot
 import database
@@ -33,9 +53,9 @@ class TestYTBotAudioTags(unittest.IsolatedAsyncioTestCase):
                     pass
 
     def test_version_constant(self):
-        """Test that bot.VERSION constant is set to 1.6.20."""
+        """Test that bot.VERSION constant is set."""
         self.assertTrue(hasattr(bot, "VERSION"))
-        self.assertEqual(bot.VERSION, "1.6.20")
+        self.assertEqual(bot.VERSION, "1.6.21")
 
     def test_database_config_roundtrip(self):
         """Test set_config and get_config in database."""

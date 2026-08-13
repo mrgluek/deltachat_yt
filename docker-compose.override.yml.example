@@ -1,0 +1,12 @@
+# Example docker-compose.override.yml for Navidrome Music Directory Integration
+#
+# Copy this file to docker-compose.override.yml to mount your Navidrome music directory
+# into the YT Bot container without modifying the tracked docker-compose.yml:
+#
+# cp docker-compose.override.yml.example docker-compose.override.yml
+
+services:
+  yt_bot:
+    volumes:
+      # Mount your host Navidrome music directory to /music inside the container
+      - /path/to/your/navidrome/music:/music

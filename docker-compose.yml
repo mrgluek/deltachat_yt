@@ -20,6 +20,10 @@ services:
       - YANDEX_PROXY=${YANDEX_PROXY:-}
       - YANDEX_TOKEN=${YANDEX_TOKEN:-}
       - BACKUP_PROXY=${BACKUP_PROXY:-}
+      - NAVIDROME_URL=${NAVIDROME_URL:-}
+      - NAVIDROME_USER=${NAVIDROME_USER:-}
+      - NAVIDROME_PASSWORD=${NAVIDROME_PASSWORD:-}
+      - NAVIDROME_MUSIC_DIR=${NAVIDROME_MUSIC_DIR:-/music}
     deploy:
       resources:
         limits:

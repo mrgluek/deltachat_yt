@@ -10,7 +10,9 @@ import threading
 import time
 import contextlib
 import urllib.request
+import urllib.parse
 import hashlib
+import secrets
 
 from deltachat2 import events, MsgData
 from deltabot_cli import BotCli
@@ -20,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.20"
+VERSION = "1.6.21"
 
 dc_cli = BotCli("ytbot")
 
@@ -1188,6 +1190,257 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         return None, None, f"Error: {e}"
 
 
+def _get_navidrome_config() -> tuple[str | None, str | None, str | None, str]:
+    """Get Navidrome / Subsonic configuration from environment or database."""
+    url = os.getenv("NAVIDROME_URL") or os.getenv("SUBSONIC_URL") or database.get_config("navidrome_url")
+    user = os.getenv("NAVIDROME_USER") or os.getenv("SUBSONIC_USER") or database.get_config("navidrome_user")
+    password = os.getenv("NAVIDROME_PASSWORD") or os.getenv("SUBSONIC_PASSWORD") or database.get_config("navidrome_password")
+    music_dir = os.getenv("NAVIDROME_MUSIC_DIR") or os.getenv("MUSIC_DIR") or database.get_config("navidrome_music_dir")
+    if not music_dir:
+        if os.path.exists("/music") and os.path.isdir("/music"):
+            music_dir = "/music"
+        else:
+            music_dir = os.path.join("data", "music")
+    return url, user, password, music_dir
+
+
+def _sanitize_filename(name: str, max_length: int = 100) -> str:
+    """Sanitize directory and file names for cross-platform compatibility."""
+    if not name:
+        return "Unknown"
+    cleaned = re.sub(r'[\\/*?:"<>|\x00-\x1f]', '_', str(name))
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip('. ')
+    if not cleaned:
+        return "Unknown"
+    return cleaned[:max_length].rstrip('. ')
+
+
+def _trigger_subsonic_scan(server_url: str, user: str, password: str) -> tuple[bool, str]:
+    """Trigger a library scan on Navidrome / Subsonic server using REST API."""
+    salt = secrets.token_hex(8)
+    token = hashlib.md5((password + salt).encode('utf-8')).hexdigest()
+    
+    base_url = server_url.rstrip('/')
+    params = {
+        'u': user,
+        't': token,
+        's': salt,
+        'v': '1.16.1',
+        'c': 'DeltaChatYTBot',
+        'f': 'json'
+    }
+    query_string = urllib.parse.urlencode(params)
+    scan_url = f"{base_url}/rest/startScan.view?{query_string}"
+    
+    try:
+        req = urllib.request.Request(
+            scan_url,
+            headers={'User-Agent': 'DeltaChatYTBot/1.0'}
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            sub_resp = data.get('subsonic-response', {})
+            if sub_resp.get('status') == 'ok':
+                scan_status = sub_resp.get('scanStatus', {})
+                count = scan_status.get('count')
+                if count is not None:
+                    return True, f"Scan initiated ({count} files indexed)"
+                return True, "Scan initiated successfully"
+            else:
+                err = sub_resp.get('error', {})
+                err_msg = err.get('message') or f"Code {err.get('code')}"
+                return False, f"Subsonic error: {err_msg}"
+    except Exception as e:
+        logger.error(f"Error triggering Navidrome scan at {base_url}: {e}")
+        return False, f"Connection failed: {e}"
+
+
+def _save_to_navidrome(filepath: str, info: dict, music_dir: str) -> tuple[str | None, str | None]:
+    """
+    Save downloaded audio file into Navidrome music directory organized as Artist/Album/Title.ext.
+    Returns (destination_path, error_message).
+    """
+    try:
+        artist = (
+            info.get("artist")
+            or info.get("uploader")
+            or info.get("channel")
+            or info.get("creator")
+            or "Unknown Artist"
+        )
+        album = info.get("album") or "Singles"
+        title = info.get("track") or info.get("title") or "Unknown Track"
+        
+        artist_clean = _sanitize_filename(artist)
+        album_clean = _sanitize_filename(album)
+        title_clean = _sanitize_filename(title)
+        
+        ext = os.path.splitext(filepath)[1].lower()
+        if not ext:
+            ext = ".opus"
+            
+        target_dir = os.path.join(music_dir, artist_clean, album_clean)
+        os.makedirs(target_dir, exist_ok=True)
+        
+        dest_filename = f"{title_clean}{ext}"
+        dest_path = os.path.join(target_dir, dest_filename)
+        
+        shutil.copy2(filepath, dest_path)
+        logger.info(f"Saved audio file to Navidrome directory: {dest_path}")
+        return dest_path, None
+    except Exception as e:
+        logger.error(f"Failed to save audio to Navidrome directory: {e}")
+        return None, str(e)
+
+
+def _run_ytms(bot, accid, msg, video_id: str):
+    """Run /ytms in a background thread with its own event loop."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_do_ytms(bot, accid, msg, video_id))
+    finally:
+        loop.close()
+
+
+async def _do_ytms(bot, accid, msg, video_id: str):
+    """Download audio, tag it, save it into Navidrome library folder, and trigger Subsonic scan."""
+    chat_id = msg.chat_id
+    req_msg_id = msg.id
+    
+    # Check Navidrome config
+    nav_url, nav_user, nav_password, music_dir = _get_navidrome_config()
+    if not nav_url or not nav_user or not nav_password:
+        _react(bot, accid, req_msg_id, "❌")
+        _send(bot, accid, chat_id, "⚠️ Navidrome is not configured. Please set NAVIDROME_URL, NAVIDROME_USER, and NAVIDROME_PASSWORD in your .env configuration.")
+        return
+
+    # 0. Resolve Yandex preview URL if target is a Yandex preview link
+    if YANDEX_PREVIEW_RE.search(video_id):
+        resolved = _resolve_yandex_preview(video_id)
+        if resolved:
+            video_id = resolved
+        else:
+            _react(bot, accid, req_msg_id, "❌")
+            _send(bot, accid, chat_id, "❌ Could not extract video link from Yandex preview.")
+            return
+
+    logger.info(f"Starting _do_ytms for {video_id} in chat {chat_id}")
+    
+    process_key = f"ytms_{chat_id}_{video_id}"
+    with _processing_lock:
+        if process_key in _processing:
+            return
+        _processing.add(process_key)
+
+    try:
+        if not _check_disk_space(bot, accid, msg):
+            return
+
+        _react(bot, accid, req_msg_id, "⏳")
+
+        # 1. Fetch info
+        configs = _get_fallback_configs()
+        info, error, successful_config_index = await _fetch_video_info_with_fallback(video_id)
+        if not info:
+            _react(bot, accid, req_msg_id, "❌")
+            _send(bot, accid, chat_id, f"❌ Could not fetch audio info: {error or 'Unknown error'}")
+            return
+        
+        duration = int(info.get("duration", 0))
+        if duration > MAX_DURATION_AUDIO:
+            _react(bot, accid, req_msg_id, "❌")
+            _send(bot, accid, chat_id, f"❌ Audio duration ({_format_duration(duration)}) exceeds maximum allowed ({MAX_DURATION_AUDIO // 60} minutes).")
+            return
+
+        # 2. Check if already in cache, or download
+        cache_path = _find_cached_file(video_id, "audio")
+        filepath = cache_path
+        
+        if not filepath:
+            with get_download_lock(video_id + "audio"):
+                filepath = _find_cached_file(video_id, "audio")
+                if not filepath:
+                    last_error = None
+                    for idx in range(successful_config_index, len(configs)):
+                        cfg = configs[idx]
+                        tmpdir = tempfile.mkdtemp(prefix="ytms_")
+                        try:
+                            start_time, end_time = _parse_time_param(video_id)
+                            dl_path, dl_info, dl_err = await _download_audio(
+                                video_id, tmpdir, duration,
+                                start_time=start_time, end_time=end_time,
+                                use_cookies=cfg["use_cookies"], custom_proxy=cfg["proxy"]
+                            )
+                            if dl_err:
+                                last_error = dl_err
+                                continue
+                            if dl_path and os.path.exists(dl_path):
+                                os.makedirs(CACHE_DIR, exist_ok=True)
+                                actual_ext = os.path.splitext(dl_path)[1].lower()
+                                saved_cache = os.path.join(CACHE_DIR, f"{_get_cache_id(video_id)}{actual_ext}")
+                                shutil.move(dl_path, saved_cache)
+                                filepath = saved_cache
+                                if dl_info:
+                                    info = dl_info
+                                break
+                        finally:
+                            shutil.rmtree(tmpdir, ignore_errors=True)
+                    if not filepath:
+                        _react(bot, accid, req_msg_id, "❌")
+                        _send(bot, accid, chat_id, f"❌ {last_error or 'Download failed'}")
+                        return
+
+        # 3. Save to Navidrome directory
+        _react(bot, accid, req_msg_id, "⌛")
+        dest_path, save_err = _save_to_navidrome(filepath, info, music_dir)
+        if save_err:
+            _react(bot, accid, req_msg_id, "❌")
+            _send(bot, accid, chat_id, f"❌ Failed to save to Navidrome directory: {save_err}")
+            return
+
+        # 4. Trigger Subsonic REST library scan
+        scan_ok, scan_msg = _trigger_subsonic_scan(nav_url, nav_user, nav_password)
+
+        # 5. Format response message
+        title = info.get("track") or info.get("title") or video_id
+        artist = (
+            info.get("artist")
+            or info.get("uploader")
+            or info.get("channel")
+            or info.get("creator")
+            or "Unknown Artist"
+        )
+        album = info.get("album") or "Singles"
+        rel_path = os.path.relpath(dest_path, music_dir)
+        dur_str = _format_duration(duration) if duration else "?"
+        filesize = os.path.getsize(filepath)
+        size_str = _format_size(filesize)
+        ext_str = os.path.splitext(filepath)[1].lower().replace(".", "").upper()
+
+        caption = (
+            f"💾 **Saved to Navidrome library!**\n\n"
+            f"🎵 **Title:** {title}\n"
+            f"👤 **Artist:** {artist}\n"
+            f"💿 **Album:** {album}\n"
+            f"📁 **Path:** `{rel_path}` ({dur_str}, {size_str}, {ext_str})\n"
+            f"🔄 **Navidrome Scan:** {scan_msg}\n\n"
+            f"🔗 {_make_yt_url(video_id)}"
+        )
+
+        _send(bot, accid, chat_id, caption, file=filepath)
+        _react(bot, accid, req_msg_id, "☑️")
+        database.add_download(chat_id, msg.from_id, video_id, title, duration, "audio_navidrome", filesize)
+
+    except Exception as e:
+        logger.error(f"Error in _do_ytms for {video_id}: {e}", exc_info=True)
+        _react(bot, accid, req_msg_id, "❌")
+        _send(bot, accid, chat_id, f"❌ Error saving to Navidrome: {e}")
+    finally:
+        with _processing_lock:
+            _processing.discard(process_key)
+
+
 def _run_download(bot, accid, msg, video_id: str, download_type: str):
     """Run download in a background thread with its own event loop."""
     loop = asyncio.new_event_loop()
@@ -1555,6 +1808,53 @@ def ytm_command(bot, accid, event):
     _handle_download_command(bot, accid, event, "audio", event.msg.text)
 
 
+@dc_cli.on(events.NewMessage(command="/ytms", is_bot=None))
+def ytms_command(bot, accid, event):
+    if _is_bot_blocked(bot, accid, event.msg):
+        return
+    if accid != dc_accid:
+        return
+    msg = event.msg
+    if _is_duplicate_msg(msg.id, "cmd"):
+        return
+
+    logger.info(f"Received /ytms command in chat {msg.chat_id} from {msg.from_id}")
+
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _send(bot, accid, msg.chat_id, "❌ Only the bot administrator can use /ytms.")
+        return
+
+    payload = (msg.text or "").strip()
+    video_id = None
+    stripped_payload = payload
+    if payload.startswith("/ytms"):
+        stripped_payload = payload[len("/ytms"):]
+        if stripped_payload.startswith("_"):
+            stripped_payload = stripped_payload[1:]
+        stripped_payload = stripped_payload.strip()
+
+    if stripped_payload:
+        video_id = _extract_video_id(stripped_payload)
+
+    if not video_id:
+        quote = getattr(msg, "quote", None) or (msg.get("quote") if isinstance(msg, dict) else None)
+        if quote:
+            quoted_text = ""
+            if isinstance(quote, dict):
+                quoted_text = quote.get("text", "")
+            else:
+                quoted_text = getattr(quote, "text", "")
+            if quoted_text:
+                video_id = _extract_video_id(quoted_text)
+
+    if not video_id:
+        _send(bot, accid, msg.chat_id, "Usage: /ytms <youtube_url_or_video_id>")
+        return
+
+    t = threading.Thread(target=_run_ytms, args=(bot, accid, msg, video_id), daemon=True)
+    t.start()
+
+
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
     msg = event.msg
@@ -1885,6 +2185,8 @@ def _get_help_text(bot, accid, from_id):
         fp_suffix = f" ({admin_fp[-8:].upper()})" if admin_fp else ""
         help_text += f"\n👑 **Admin:** `{admin_email}`{fp_suffix}\n"
         help_text += "\n**Admin Commands:**\n"
+        help_text += "/ytms <url> — Save audio to Navidrome library\n"
+        help_text += "/ytms_<video_id> — Save audio to Navidrome by ID\n"
         help_text += "/transports — Show configured mail relays & stats\n"
         help_text += "/addtransport — Add a backup mail relay\n"
         help_text += "/rmtransport <addr> — Remove a mail relay\n"
@@ -2177,18 +2479,24 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
     audio_btn = f"💿 {audio_fmt} ({audio_size_str}) {aud_cmd}" if can_audio else f"💿 Too long (> {MAX_DURATION_AUDIO // 60}m)"
 
     is_audio_only = bool(AUDIO_ONLY_URL_RE.search(video_url))
+    is_admin = _is_dc_admin(bot, accid, msg.from_id)
+    nav_btn = f"💾 /ytms_{short_id}" if is_admin and can_audio else ""
 
     if is_audio_only:
+        btn_line = f"{audio_btn}   {nav_btn}" if nav_btn else audio_btn
         lines = [
             f"🎵 [Audio: \"{title}\" ({dur_str})]({video_url})",
             "",
-            audio_btn
+            btn_line
         ]
     else:
+        btn_line = f"{video_btn}   {audio_btn}"
+        if nav_btn:
+            btn_line += f"   {nav_btn}"
         lines = [
             f"📺 [Video: \"{title}\" ({dur_str})]({video_url})",
             "",
-            f"{video_btn}   {audio_btn}"
+            btn_line
         ]
 
     _send(bot, accid, msg.chat_id, "\n".join(lines), file=thumb_path)
