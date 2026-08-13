@@ -13,6 +13,9 @@ hc_ping() {
 trap 'hc_ping /fail' ERR
 hc_ping /start
 
+# Prevent git from hanging on auth / credential prompts
+export GIT_TERMINAL_PROMPT=0
+
 # --- BACKUP REMOTE ---
 BACKUP_REMOTE_URL="https://git.gluek.info/gluek/deltachat_yt"
 
@@ -23,15 +26,25 @@ fi
 
 echo "Checking for updates..."
 
+# Helper to fetch with strict connection and transfer timeouts (10s)
+fetch_remote() {
+    local remote="$1"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 15 git -c http.connectTimeout=10 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 fetch "$remote"
+    else
+        git -c http.connectTimeout=10 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 fetch "$remote"
+    fi
+}
+
 # --- FALLBACK LOGIC ---
 ACTIVE_REMOTE=""
 
-if git fetch origin; then
+if fetch_remote origin; then
     ACTIVE_REMOTE="origin"
     echo "✅ GitHub (origin) is reachable."
-elif git fetch backup; then
+elif fetch_remote backup; then
     ACTIVE_REMOTE="backup"
-    echo "⚠️ GitHub unreachable. Using Forgejo (backup) instead."
+    echo "⚠️ GitHub unreachable or timed out. Using Forgejo (backup) instead."
 else
     echo "❌ ERROR: Both GitHub and Forgejo are unreachable!"
     exit 1
