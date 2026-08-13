@@ -1190,18 +1190,20 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         return None, None, f"Error: {e}"
 
 
-def _get_navidrome_config() -> tuple[str | None, str | None, str | None, str]:
+def _get_navidrome_config() -> tuple[str | None, str | None, str | None, str | None, str | None, str]:
     """Get Navidrome / Subsonic configuration from environment or database."""
     url = os.getenv("NAVIDROME_URL") or os.getenv("SUBSONIC_URL") or database.get_config("navidrome_url")
     user = os.getenv("NAVIDROME_USER") or os.getenv("SUBSONIC_USER") or database.get_config("navidrome_user")
     password = os.getenv("NAVIDROME_PASSWORD") or os.getenv("SUBSONIC_PASSWORD") or database.get_config("navidrome_password")
+    token = os.getenv("NAVIDROME_TOKEN") or os.getenv("SUBSONIC_TOKEN") or database.get_config("navidrome_token")
+    salt = os.getenv("NAVIDROME_SALT") or os.getenv("SUBSONIC_SALT") or database.get_config("navidrome_salt")
     music_dir = os.getenv("NAVIDROME_MUSIC_DIR") or os.getenv("MUSIC_DIR") or database.get_config("navidrome_music_dir")
     if not music_dir:
         if os.path.exists("/music") and os.path.isdir("/music"):
             music_dir = "/music"
         else:
             music_dir = os.path.join("data", "music")
-    return url, user, password, music_dir
+    return url, user, password, token, salt, music_dir
 
 
 def _sanitize_filename(name: str, max_length: int = 100) -> str:
@@ -1215,16 +1217,22 @@ def _sanitize_filename(name: str, max_length: int = 100) -> str:
     return cleaned[:max_length].rstrip('. ')
 
 
-def _trigger_subsonic_scan(server_url: str, user: str, password: str) -> tuple[bool, str]:
+def _trigger_subsonic_scan(server_url: str, user: str, password: str = None, token: str = None, salt: str = None) -> tuple[bool, str]:
     """Trigger a library scan on Navidrome / Subsonic server using REST API."""
-    salt = secrets.token_hex(8)
-    token = hashlib.md5((password + salt).encode('utf-8')).hexdigest()
+    if token and salt:
+        auth_token = token
+        auth_salt = salt
+    elif password:
+        auth_salt = secrets.token_hex(8)
+        auth_token = hashlib.md5((password + auth_salt).encode('utf-8')).hexdigest()
+    else:
+        return False, "No password or token+salt configured for Navidrome authentication."
     
     base_url = server_url.rstrip('/')
     params = {
         'u': user,
-        't': token,
-        's': salt,
+        't': auth_token,
+        's': auth_salt,
         'v': '1.16.1',
         'c': 'DeltaChatYTBot',
         'f': 'json'
@@ -1309,10 +1317,11 @@ async def _do_ytms(bot, accid, msg, video_id: str):
     req_msg_id = msg.id
     
     # Check Navidrome config
-    nav_url, nav_user, nav_password, music_dir = _get_navidrome_config()
-    if not nav_url or not nav_user or not nav_password:
+    nav_url, nav_user, nav_password, nav_token, nav_salt, music_dir = _get_navidrome_config()
+    has_auth = bool(nav_password or (nav_token and nav_salt))
+    if not nav_url or not nav_user or not has_auth:
         _react(bot, accid, req_msg_id, "❌")
-        _send(bot, accid, chat_id, "⚠️ Navidrome is not configured. Please set NAVIDROME_URL, NAVIDROME_USER, and NAVIDROME_PASSWORD in your .env configuration.")
+        _send(bot, accid, chat_id, "⚠️ Navidrome is not configured. Please set NAVIDROME_URL, NAVIDROME_USER, and either NAVIDROME_PASSWORD or NAVIDROME_TOKEN+NAVIDROME_SALT in your .env configuration.")
         return
 
     # 0. Resolve Yandex preview URL if target is a Yandex preview link
@@ -1400,7 +1409,9 @@ async def _do_ytms(bot, accid, msg, video_id: str):
             return
 
         # 4. Trigger Subsonic REST library scan
-        scan_ok, scan_msg = _trigger_subsonic_scan(nav_url, nav_user, nav_password)
+        scan_ok, scan_msg = _trigger_subsonic_scan(
+            nav_url, nav_user, password=nav_password, token=nav_token, salt=nav_salt
+        )
 
         # 5. Format response message
         title = info.get("track") or info.get("title") or video_id

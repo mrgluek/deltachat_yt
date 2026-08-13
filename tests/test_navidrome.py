@@ -78,10 +78,29 @@ class TestNavidromeIntegration(unittest.TestCase):
             "NAVIDROME_PASSWORD": "secretpassword",
             "NAVIDROME_MUSIC_DIR": self.temp_dir
         }, clear=True):
-            url, user, pwd, music_dir = bot._get_navidrome_config()
+            url, user, pwd, token, salt, music_dir = bot._get_navidrome_config()
             self.assertEqual(url, "https://music.example.com")
             self.assertEqual(user, "admin")
             self.assertEqual(pwd, "secretpassword")
+            self.assertIsNone(token)
+            self.assertIsNone(salt)
+            self.assertEqual(music_dir, self.temp_dir)
+
+    def test_get_navidrome_config_token_salt(self):
+        """Test reading Navidrome token and salt when password is not set."""
+        with patch.dict(os.environ, {
+            "NAVIDROME_URL": "https://music.example.com",
+            "NAVIDROME_USER": "admin",
+            "NAVIDROME_TOKEN": "mytoken123",
+            "NAVIDROME_SALT": "mysalt456",
+            "NAVIDROME_MUSIC_DIR": self.temp_dir
+        }, clear=True):
+            url, user, pwd, token, salt, music_dir = bot._get_navidrome_config()
+            self.assertEqual(url, "https://music.example.com")
+            self.assertEqual(user, "admin")
+            self.assertIsNone(pwd)
+            self.assertEqual(token, "mytoken123")
+            self.assertEqual(salt, "mysalt456")
             self.assertEqual(music_dir, self.temp_dir)
 
     def test_save_to_navidrome(self):
@@ -127,7 +146,7 @@ class TestNavidromeIntegration(unittest.TestCase):
         mock_response.__enter__.return_value = mock_response
         mock_urlopen.return_value = mock_response
 
-        ok, msg = bot._trigger_subsonic_scan("https://music.example.com", "admin", "secret123")
+        ok, msg = bot._trigger_subsonic_scan("https://music.example.com", "admin", password="secret123")
         self.assertTrue(ok)
         self.assertIn("128 files indexed", msg)
 
@@ -138,6 +157,33 @@ class TestNavidromeIntegration(unittest.TestCase):
         self.assertIn("v=1.16.1", req.full_url)
         self.assertIn("f=json", req.full_url)
         self.assertIn("c=DeltaChatYTBot", req.full_url)
+
+    @patch("urllib.request.urlopen")
+    def test_trigger_subsonic_scan_token_salt(self, mock_urlopen):
+        """Test Subsonic scan trigger using precomputed token and salt without plaintext password."""
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "subsonic-response": {
+                "status": "ok",
+                "version": "1.16.1",
+                "scanStatus": {
+                    "count": 42
+                }
+            }
+        }).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        ok, msg = bot._trigger_subsonic_scan(
+            "https://music.example.com", "admin",
+            token="abcdef1234567890", salt="fixedsalt123"
+        )
+        self.assertTrue(ok)
+        self.assertIn("42 files indexed", msg)
+
+        req = mock_urlopen.call_args[0][0]
+        self.assertIn("t=abcdef1234567890", req.full_url)
+        self.assertIn("s=fixedsalt123", req.full_url)
 
     @patch("urllib.request.urlopen")
     def test_trigger_subsonic_scan_error(self, mock_urlopen):

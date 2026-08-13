@@ -144,8 +144,9 @@ The bot can save downloaded audio tracks (with all embedded tags and cover art) 
 
 ### 1. Configuration (`.env`)
 
-Add your Navidrome connection details to `.env`:
+Add your Navidrome connection details to `.env`. You can use either your plain password **or** a precomputed Subsonic MD5 token and salt (so your actual password is never stored):
 
+**Option A: Using password**
 ```env
 # Navidrome / Subsonic Server URL
 NAVIDROME_URL=https://music.example.com
@@ -157,6 +158,27 @@ NAVIDROME_PASSWORD=your_navidrome_password
 # Target Music Folder inside the container (default: /music)
 NAVIDROME_MUSIC_DIR=/music
 ```
+
+**Option B: Using precomputed token + salt (no plaintext password)**
+```env
+# Navidrome / Subsonic Server URL
+NAVIDROME_URL=https://music.example.com
+
+# Navidrome User & Token
+NAVIDROME_USER=admin
+NAVIDROME_TOKEN=your_precomputed_md5_token
+NAVIDROME_SALT=your_custom_salt
+
+# Target Music Folder inside the container (default: /music)
+NAVIDROME_MUSIC_DIR=/music
+```
+
+> [!TIP]
+> **Generate Token & Salt:**
+> To calculate `NAVIDROME_TOKEN` from your password without saving the password:
+> ```bash
+> python3 -c "import hashlib, secrets; salt = secrets.token_hex(8); pwd = input('Enter Navidrome password: '); token = hashlib.md5((pwd + salt).encode()).hexdigest(); print(f'NAVIDROME_SALT={salt}\nNAVIDROME_TOKEN={token}')"
+> ```
 
 ### 2. Music Directory Mount (`docker-compose.override.yml`)
 
