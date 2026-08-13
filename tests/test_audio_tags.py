@@ -55,7 +55,7 @@ class TestYTBotAudioTags(unittest.IsolatedAsyncioTestCase):
     def test_version_constant(self):
         """Test that bot.VERSION constant is set."""
         self.assertTrue(hasattr(bot, "VERSION"))
-        self.assertEqual(bot.VERSION, "1.6.21")
+        self.assertEqual(bot.VERSION, "1.6.22")
 
     def test_database_config_roundtrip(self):
         """Test set_config and get_config in database."""
@@ -81,7 +81,7 @@ class TestYTBotAudioTags(unittest.IsolatedAsyncioTestCase):
 
     @patch("asyncio.create_subprocess_exec")
     async def test_download_audio_tag_options(self, mock_subprocess):
-        """Verify yt-dlp audio download command includes metadata, thumbnail, and parse-metadata flags."""
+        """Verify yt-dlp audio download command includes metadata, thumbnail, subtitles, and parse-metadata flags."""
         mock_proc = MagicMock()
         mock_proc.returncode = 0
         
@@ -104,6 +104,10 @@ class TestYTBotAudioTags(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("--embed-metadata", cmd_args)
         self.assertIn("--embed-thumbnail", cmd_args)
+        self.assertIn("--write-subs", cmd_args)
+        self.assertIn("--write-auto-subs", cmd_args)
+        self.assertIn("--convert-subs", cmd_args)
+        self.assertIn("lrc", cmd_args)
         self.assertIn("--parse-metadata", cmd_args)
         self.assertIn("%(webpage_url)s:%(meta_comment)s", cmd_args)
         self.assertIn("%(webpage_url)s:%(meta_description)s", cmd_args)

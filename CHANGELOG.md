@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.22] - 2026-08-14
+
+### Added
+- **Subtitles & Lyrics Extraction:** Automatically downloads official or auto-generated YouTube subtitles (`--write-subs`, `--write-auto-subs`, `--convert-subs lrc`).
+- **Audio Metadata Lyrics Embedding:** Parses clean plain-text lyrics and embeds them into audio metadata tags (`LYRICS` / `UNSYNCEDLYRICS` Vorbis comments for Opus/FLAC, `USLT` for MP3, `©lyr` for MP4/M4A) via `mutagen`.
+- **Synchronized Karaoke `.lrc` for Navidrome:** Automatically converts subtitles to synchronized `.lrc` format and saves `<Track Title>.lrc` alongside the audio file in the Navidrome library directory on `/ytms`.
+- **Navidrome Diagnostics & Connectivity Status:** Checks and displays Navidrome connection status in startup logs, `/help` (admin), and `/stats` (admin).
+- **Network Timeouts & Failover in `update.sh`:** Added connection timeouts, low-speed checks, and automatic fallback to Forgejo mirror.
+
 ## [1.6.21] - 2026-08-13
 
 ### Added

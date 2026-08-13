@@ -4,3 +4,4 @@ yt-dlp[default]
 qrcode
 curl-cffi
 yandex-music
+mutagen>=1.47.0

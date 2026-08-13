@@ -58,8 +58,8 @@ class TestNavidromeIntegration(unittest.TestCase):
                     pass
 
     def test_version_bumped(self):
-        """Test bot.VERSION is 1.6.21."""
-        self.assertEqual(bot.VERSION, "1.6.21")
+        """Test bot.VERSION is 1.6.22."""
+        self.assertEqual(bot.VERSION, "1.6.22")
 
     def test_sanitize_filename(self):
         """Test filename sanitization for various edge cases and illegal characters."""
@@ -104,11 +104,14 @@ class TestNavidromeIntegration(unittest.TestCase):
             self.assertEqual(music_dir, self.temp_dir)
 
     def test_save_to_navidrome(self):
-        """Test copying audio file into organized Artist/Album/Title.opus structure."""
-        # Create a dummy audio file
+        """Test copying audio file and companion .lrc into organized Artist/Album/Title structure."""
+        # Create a dummy audio file and a companion .lrc file
         src_file = os.path.join(self.temp_dir, "temp_source.opus")
         with open(src_file, "wb") as f:
             f.write(b"OPUS_DUMMY_DATA")
+        src_lrc = os.path.join(self.temp_dir, "temp_source.lrc")
+        with open(src_lrc, "w", encoding="utf-8") as f:
+            f.write("[00:10.00] Never gonna give you up")
 
         info = {
             "artist": "Rick Astley",
@@ -117,17 +120,23 @@ class TestNavidromeIntegration(unittest.TestCase):
         }
 
         music_dir = os.path.join(self.temp_dir, "music_library")
-        dest_path, err = bot._save_to_navidrome(src_file, info, music_dir)
+        dest_path, dest_lrc, err = bot._save_to_navidrome(src_file, info, music_dir)
 
         self.assertIsNone(err)
         self.assertIsNotNone(dest_path)
         self.assertTrue(os.path.exists(dest_path))
+        self.assertIsNotNone(dest_lrc)
+        self.assertTrue(os.path.exists(dest_lrc))
 
         expected_rel = os.path.join("Rick Astley", "Whenever You Need Somebody", "Never Gonna Give You Up.opus")
+        expected_lrc_rel = os.path.join("Rick Astley", "Whenever You Need Somebody", "Never Gonna Give You Up.lrc")
         self.assertTrue(dest_path.endswith(expected_rel))
+        self.assertTrue(dest_lrc.endswith(expected_lrc_rel))
 
         with open(dest_path, "rb") as f:
             self.assertEqual(f.read(), b"OPUS_DUMMY_DATA")
+        with open(dest_lrc, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "[00:10.00] Never gonna give you up")
 
     @patch("urllib.request.urlopen")
     def test_trigger_subsonic_scan_success(self, mock_urlopen):
@@ -323,7 +332,7 @@ class TestNavidromeIntegration(unittest.TestCase):
     def test_do_ytms_sends_text_without_file_attachment(self, mock_react, mock_send, mock_fetch_info, mock_save, mock_scan, mock_nav_cfg):
         """Verify _do_ytms sends text confirmation only, without attaching audio file."""
         mock_nav_cfg.return_value = ("https://music.example.com", "admin", "pwd", None, None, self.temp_dir)
-        mock_save.return_value = (os.path.join(self.temp_dir, "Track.opus"), None)
+        mock_save.return_value = (os.path.join(self.temp_dir, "Track.opus"), None, None)
 
         async def fake_info(video_id):
             return {"duration": 120, "extractor": "youtube", "title": "Test Title"}, None, 0

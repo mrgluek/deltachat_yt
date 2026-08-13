@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.21"
+VERSION = "1.6.22"
 
 dc_cli = BotCli("ytbot")
 
@@ -955,6 +955,151 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         return None, None, f"Error: {e}"
 
 
+def _extract_clean_lyrics(raw_content: str) -> str:
+    """Extract clean plain-text lyrics from VTT, SRT, or LRC subtitle content."""
+    if not raw_content:
+        return ""
+    lines = []
+    prev_line = None
+    for line in raw_content.splitlines():
+        line = line.strip()
+        if not line or line.startswith('WEBVTT') or line.startswith('Kind:') or line.startswith('Language:') or line.startswith('NOTE'):
+            continue
+        if re.match(r'^\d+$', line):
+            continue
+        # Remove timestamps: [00:12.34], 00:00:01.000 --> 00:00:04.000
+        line = re.sub(r'\[\d{2}:\d{2}[\.:]\d{2,3}\]', '', line)
+        line = re.sub(r'\d{2}:\d{2}:\d{2}[\.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[\.,]\d{3}.*', '', line)
+        # Remove HTML tags & karaoke timing tags like <00:00:01.000>
+        line = re.sub(r'<[^>]+>', '', line)
+        line = line.strip()
+        if line and line != prev_line:
+            lines.append(line)
+            prev_line = line
+    return '\n'.join(lines)
+
+
+def _convert_subtitles_to_lrc(sub_content: str) -> str:
+    """Convert VTT / SRT / LRC content to normalized synchronized LRC format."""
+    if not sub_content:
+        return ""
+    # If already standard LRC format (has lines starting with [mm:ss.xx])
+    lrc_pattern = re.compile(r'\[\d{2}:\d{2}[\.:]\d{2,3}\]')
+    if lrc_pattern.search(sub_content) and "-->" not in sub_content:
+        clean_lrc = []
+        for line in sub_content.splitlines():
+            line = line.strip()
+            if line:
+                clean_lrc.append(line)
+        return '\n'.join(clean_lrc)
+    
+    # Parse VTT / SRT cues
+    lrc_lines = []
+    blocks = re.split(r'\n\s*\n', sub_content.strip())
+    for block in blocks:
+        lines = [l.strip() for l in block.splitlines() if l.strip()]
+        if not lines:
+            continue
+        ts_match = None
+        text_lines = []
+        for l in lines:
+            m = re.search(r'(\d{2}):(\d{2}):(\d{2})[\.,](\d{2,3})\s*-->', l)
+            if m:
+                hours, minutes, seconds, ms = m.groups()
+                total_min = int(hours) * 60 + int(minutes)
+                hundredths = int(ms[:2])
+                ts_match = f"[{total_min:02d}:{int(seconds):02d}.{hundredths:02d}]"
+            elif not l.startswith('WEBVTT') and not l.startswith('Kind:') and not l.startswith('Language:') and not re.match(r'^\d+$', l):
+                cleaned = re.sub(r'<[^>]+>', '', l).strip()
+                if cleaned:
+                    text_lines.append(cleaned)
+        if ts_match and text_lines:
+            lrc_lines.append(f"{ts_match} {' '.join(text_lines)}")
+    return '\n'.join(lrc_lines)
+
+
+def _embed_lyrics_in_audio(audio_path: str, lyrics_text: str):
+    """Embed lyrics into audio metadata tags (Vorbis comment for Opus/FLAC, USLT for MP3, ©lyr for MP4/M4A)."""
+    if not lyrics_text or not audio_path or not os.path.exists(audio_path):
+        return
+    try:
+        import mutagen
+        ext = os.path.splitext(audio_path)[1].lower()
+        if ext in (".opus", ".ogg"):
+            from mutagen.oggopus import OggOpus
+            audio = OggOpus(audio_path)
+            audio["lyrics"] = lyrics_text
+            audio["unsyncedlyrics"] = lyrics_text
+            audio.save()
+            logger.info(f"Embedded lyrics into Opus Vorbis comments: {audio_path}")
+        elif ext == ".mp3":
+            from mutagen.id3 import ID3, USLT, ID3NoHeaderError
+            try:
+                tags = ID3(audio_path)
+            except ID3NoHeaderError:
+                tags = ID3()
+            tags.delall("USLT")
+            tags.add(USLT(encoding=3, lang='eng', desc='', text=lyrics_text))
+            tags.save(audio_path)
+            logger.info(f"Embedded lyrics into MP3 ID3 USLT tag: {audio_path}")
+        elif ext in (".m4a", ".mp4"):
+            from mutagen.mp4 import MP4
+            audio = MP4(audio_path)
+            audio["\xa9lyr"] = lyrics_text
+            audio.save()
+            logger.info(f"Embedded lyrics into MP4/M4A tag: {audio_path}")
+        elif ext == ".flac":
+            from mutagen.flac import FLAC
+            audio = FLAC(audio_path)
+            audio["lyrics"] = lyrics_text
+            audio.save()
+            logger.info(f"Embedded lyrics into FLAC tag: {audio_path}")
+    except Exception as e:
+        logger.warning(f"Could not embed lyrics into {audio_path}: {e}")
+
+
+def _process_subtitles_and_lyrics(output_dir: str, safe_id: str, audio_path: str) -> tuple[str | None, str | None]:
+    """
+    Discovers downloaded subtitles in output_dir, converts to standardized .lrc,
+    and embeds clean lyrics text into audio_path.
+    Returns (lrc_filepath, clean_lyrics_text).
+    """
+    sub_files = []
+    if os.path.exists(output_dir):
+        for fname in os.listdir(output_dir):
+            if fname.startswith(safe_id) and (fname.endswith('.lrc') or fname.endswith('.vtt') or fname.endswith('.srt')):
+                sub_files.append(os.path.join(output_dir, fname))
+            
+    if not sub_files:
+        return None, None
+        
+    chosen_sub = sub_files[0]
+    for s in sub_files:
+        if s.endswith('.lrc'):
+            chosen_sub = s
+            break
+            
+    try:
+        with open(chosen_sub, 'r', encoding='utf-8', errors='ignore') as f:
+            raw_content = f.read()
+            
+        clean_lyrics = _extract_clean_lyrics(raw_content)
+        lrc_content = _convert_subtitles_to_lrc(raw_content)
+        
+        lrc_path = os.path.join(output_dir, f"{safe_id}.lrc")
+        if lrc_content:
+            with open(lrc_path, 'w', encoding='utf-8') as f:
+                f.write(lrc_content)
+                
+        if clean_lyrics and audio_path and os.path.exists(audio_path):
+            _embed_lyrics_in_audio(audio_path, clean_lyrics)
+            
+        return lrc_path if os.path.exists(lrc_path) else chosen_sub, clean_lyrics
+    except Exception as e:
+        logger.warning(f"Error processing subtitles for {safe_id}: {e}")
+        return None, None
+
+
 async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None) -> tuple[str | None, dict | None, str | None]:
     url = _make_yt_url(video_id)
     if "music.yandex." in url:
@@ -1068,6 +1213,10 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         "--audio-format", fmt,
         "--embed-metadata",
         "--embed-thumbnail",
+        "--write-subs",
+        "--write-auto-subs",
+        "--sub-langs", "all,-live_chat",
+        "--convert-subs", "lrc",
         "--parse-metadata", "%(webpage_url)s:%(meta_comment)s",
         "--parse-metadata", "%(webpage_url)s:%(meta_description)s",
         "--no-warnings",
@@ -1134,6 +1283,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 filepath = _find_file_in_dir(output_dir, ['.opus', '.mp3', '.m4a', '.webm'], prefix=safe_id)
 
         if filepath and os.path.exists(filepath):
+            # Process and embed lyrics into audio file & generate standardized .lrc
+            _process_subtitles_and_lyrics(output_dir, safe_id, filepath)
             if start_time or end_time:
                 ext = os.path.splitext(filepath)[1]
                 trimmed_filepath = os.path.splitext(filepath)[0] + f"_trimmed{ext}"
@@ -1305,10 +1456,10 @@ def _check_navidrome_status() -> tuple[bool, str]:
         return False, f"Connection failed ({e})"
 
 
-def _save_to_navidrome(filepath: str, info: dict, music_dir: str) -> tuple[str | None, str | None]:
+def _save_to_navidrome(filepath: str, info: dict, music_dir: str, video_id: str = None) -> tuple[str | None, str | None, str | None]:
     """
-    Save downloaded audio file into Navidrome music directory organized as Artist/Album/Title.ext.
-    Returns (destination_path, error_message).
+    Save downloaded audio file (and companion .lrc file if present) into Navidrome music directory organized as Artist/Album/Title.ext.
+    Returns (destination_audio_path, destination_lrc_path, error_message).
     """
     try:
         artist = (
@@ -1337,10 +1488,23 @@ def _save_to_navidrome(filepath: str, info: dict, music_dir: str) -> tuple[str |
         
         shutil.copy2(filepath, dest_path)
         logger.info(f"Saved audio file to Navidrome directory: {dest_path}")
-        return dest_path, None
+
+        # Check for companion .lrc file
+        dest_lrc = None
+        lrc_src = os.path.splitext(filepath)[0] + ".lrc"
+        if not os.path.exists(lrc_src) and video_id:
+            candidate = os.path.join(CACHE_DIR, f"{_get_cache_id(video_id)}.lrc")
+            if os.path.exists(candidate):
+                lrc_src = candidate
+        if os.path.exists(lrc_src):
+            dest_lrc = os.path.join(target_dir, f"{title_clean}.lrc")
+            shutil.copy2(lrc_src, dest_lrc)
+            logger.info(f"Saved companion lyrics file to Navidrome directory: {dest_lrc}")
+
+        return dest_path, dest_lrc, None
     except Exception as e:
         logger.error(f"Failed to save audio to Navidrome directory: {e}")
-        return None, str(e)
+        return None, None, str(e)
 
 
 def _run_ytms(bot, accid, msg, video_id: str):
@@ -1429,9 +1593,13 @@ async def _do_ytms(bot, accid, msg, video_id: str):
                             if dl_path and os.path.exists(dl_path):
                                 os.makedirs(CACHE_DIR, exist_ok=True)
                                 actual_ext = os.path.splitext(dl_path)[1].lower()
-                                saved_cache = os.path.join(CACHE_DIR, f"{_get_cache_id(video_id)}{actual_ext}")
+                                safe_cache_id = _get_cache_id(video_id)
+                                saved_cache = os.path.join(CACHE_DIR, f"{safe_cache_id}{actual_ext}")
                                 shutil.move(dl_path, saved_cache)
                                 filepath = saved_cache
+                                lrc_candidate = os.path.join(tmpdir, f"{safe_cache_id}.lrc")
+                                if os.path.exists(lrc_candidate):
+                                    shutil.move(lrc_candidate, os.path.join(CACHE_DIR, f"{safe_cache_id}.lrc"))
                                 if dl_info:
                                     info = dl_info
                                 break
@@ -1444,7 +1612,7 @@ async def _do_ytms(bot, accid, msg, video_id: str):
 
         # 3. Save to Navidrome directory
         _react(bot, accid, req_msg_id, "⌛")
-        dest_path, save_err = _save_to_navidrome(filepath, info, music_dir)
+        dest_path, dest_lrc, save_err = _save_to_navidrome(filepath, info, music_dir, video_id=video_id)
         if save_err:
             _react(bot, accid, req_msg_id, "❌")
             _send(bot, accid, chat_id, f"❌ Failed to save to Navidrome directory: {save_err}")
@@ -1470,13 +1638,14 @@ async def _do_ytms(bot, accid, msg, video_id: str):
         filesize = os.path.getsize(filepath)
         size_str = _format_size(filesize)
         ext_str = os.path.splitext(filepath)[1].lower().replace(".", "").upper()
+        lyrics_suffix = " + 📝 Lyrics" if dest_lrc else ""
 
         caption = (
             f"💾 **Saved to Navidrome library!**\n\n"
             f"🎵 **Title:** {title}\n"
             f"👤 **Artist:** {artist}\n"
             f"💿 **Album:** {album}\n"
-            f"📁 **Path:** `{rel_path}` ({dur_str}, {size_str}, {ext_str})\n"
+            f"📁 **Path:** `{rel_path}` ({dur_str}, {size_str}, {ext_str}{lyrics_suffix})\n"
             f"🔄 **Navidrome Scan:** {scan_msg}\n\n"
             f"🔗 {_make_yt_url(video_id)}"
         )
@@ -1708,8 +1877,13 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     
                     os.makedirs(CACHE_DIR, exist_ok=True)
                     actual_ext = os.path.splitext(filepath)[1].lower()
-                    cache_path = os.path.join(CACHE_DIR, f"{_get_cache_id(video_id)}{actual_ext}")
+                    safe_cache_id = _get_cache_id(video_id)
+                    cache_path = os.path.join(CACHE_DIR, f"{safe_cache_id}{actual_ext}")
                     shutil.move(filepath, cache_path)
+                    
+                    lrc_candidate = os.path.join(tmpdir, f"{safe_cache_id}.lrc")
+                    if os.path.exists(lrc_candidate):
+                        shutil.move(lrc_candidate, os.path.join(CACHE_DIR, f"{safe_cache_id}.lrc"))
                     
                     await _send_from_cache(bot, accid, msg, video_id, download_type, cache_path, info)
                     return
