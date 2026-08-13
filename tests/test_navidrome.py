@@ -260,6 +260,59 @@ class TestNavidromeIntegration(unittest.TestCase):
         help_text = bot._get_help_text(mock_bot, 1, 123)
         self.assertIn("/ytms <url>", help_text)
         self.assertIn("/ytms_<video_id>", help_text)
+        self.assertIn("Navidrome:", help_text)
+
+    def test_check_navidrome_status_not_configured(self):
+        """Test _check_navidrome_status when no Navidrome config is present."""
+        with patch.dict(os.environ, {}, clear=True):
+            ok, msg = bot._check_navidrome_status()
+            self.assertFalse(ok)
+            self.assertIn("Not configured", msg)
+
+    @patch("urllib.request.urlopen")
+    def test_check_navidrome_status_success(self, mock_urlopen):
+        """Test _check_navidrome_status with successful Subsonic ping."""
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "subsonic-response": {
+                "status": "ok",
+                "version": "1.16.1",
+                "type": "navidrome",
+                "serverVersion": "0.54.5"
+            }
+        }).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        with patch.dict(os.environ, {
+            "NAVIDROME_URL": "https://music.example.com",
+            "NAVIDROME_USER": "admin",
+            "NAVIDROME_TOKEN": "abc",
+            "NAVIDROME_SALT": "123",
+            "NAVIDROME_MUSIC_DIR": self.temp_dir
+        }, clear=True):
+            ok, msg = bot._check_navidrome_status()
+            self.assertTrue(ok)
+            self.assertIn("Navidrome v0.54.5", msg)
+            self.assertIn("folder OK", msg)
+
+    @patch("bot._is_dc_admin", return_value=True)
+    @patch("bot._check_navidrome_status", return_value=(True, "Navidrome v0.54.5 (folder OK: `/music`)"))
+    @patch("bot._send")
+    def test_stats_command_includes_navidrome_for_admin(self, mock_send, mock_check, mock_is_admin):
+        """Test that /stats output includes Navidrome status for admin."""
+        mock_bot = MagicMock()
+        mock_event = MagicMock()
+        mock_event.msg.id = 103
+        mock_event.msg.chat_id = 202
+        mock_event.msg.from_id = 303
+        mock_event.msg.is_bot = False
+
+        bot.stats_command(mock_bot, 1, mock_event)
+        mock_send.assert_called_once()
+        sent_reply = mock_send.call_args[0][3]
+        self.assertIn("Navidrome:", sent_reply)
+        self.assertIn("Navidrome v0.54.5", sent_reply)
 
 
 if __name__ == "__main__":

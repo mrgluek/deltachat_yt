@@ -1263,6 +1263,48 @@ def _trigger_subsonic_scan(server_url: str, user: str, password: str = None, tok
         return False, f"Connection failed: {e}"
 
 
+def _check_navidrome_status() -> tuple[bool, str]:
+    """Check Navidrome connectivity, authentication, and music directory."""
+    nav_url, nav_user, nav_password, nav_token, nav_salt, music_dir = _get_navidrome_config()
+    has_auth = bool(nav_password or (nav_token and nav_salt))
+    if not nav_url or not nav_user or not has_auth:
+        return False, "Not configured (set NAVIDROME_URL, NAVIDROME_USER, NAVIDROME_PASSWORD or NAVIDROME_TOKEN+SALT)"
+
+    if nav_token and nav_salt:
+        auth_token = nav_token
+        auth_salt = nav_salt
+    else:
+        auth_salt = secrets.token_hex(8)
+        auth_token = hashlib.md5((nav_password + auth_salt).encode('utf-8')).hexdigest()
+
+    base_url = nav_url.rstrip('/')
+    params = {
+        'u': nav_user,
+        't': auth_token,
+        's': auth_salt,
+        'v': '1.16.1',
+        'c': 'DeltaChatYTBot',
+        'f': 'json'
+    }
+    ping_url = f"{base_url}/rest/ping.view?{urllib.parse.urlencode(params)}"
+    try:
+        req = urllib.request.Request(ping_url, headers={'User-Agent': 'DeltaChatYTBot/1.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            sub_resp = data.get('subsonic-response', {})
+            if sub_resp.get('status') == 'ok':
+                server_ver = sub_resp.get('serverVersion') or sub_resp.get('version') or "OK"
+                server_type = str(sub_resp.get('type') or 'Navidrome').capitalize()
+                dir_exists = os.path.exists(music_dir) and os.path.isdir(music_dir)
+                dir_status = "folder OK" if dir_exists else "folder missing"
+                return True, f"{server_type} v{server_ver} ({dir_status}: `{music_dir}`)"
+            else:
+                err = sub_resp.get('error', {})
+                return False, f"Subsonic error: {err.get('message', 'Unknown')} (code {err.get('code')})"
+    except Exception as e:
+        return False, f"Connection failed ({e})"
+
+
 def _save_to_navidrome(filepath: str, info: dict, music_dir: str) -> tuple[str | None, str | None]:
     """
     Save downloaded audio file into Navidrome music directory organized as Artist/Album/Title.ext.
@@ -2098,7 +2140,8 @@ def stats_command(bot, accid, event):
     s = database.get_stats()
     videos = s["by_type"].get("video", 0)
     audios = s["by_type"].get("audio", 0)
-    usage = shutil.disk_usage(CACHE_DIR)
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    usage = shutil.disk_usage(CACHE_DIR if os.path.exists(CACHE_DIR) else ".")
     free_gb = usage.free / (1024**3)
     total_gb = usage.total / (1024**3)
     free_pct = (usage.free / usage.total) * 100
@@ -2124,9 +2167,12 @@ def stats_command(bot, accid, event):
     )
 
     if is_admin:
+        nav_ok, nav_msg = _check_navidrome_status()
+        nav_icon = "🟢" if nav_ok else "🔴" if ("error" in nav_msg.lower() or "failed" in nav_msg.lower()) else "⚪"
         reply += (
             f"\n💾 **Disk Space (Admin only)**\n"
             f"Free: {free_gb:.1f} GB of {total_gb:.1f} GB ({free_pct:.1f}%)\n"
+            f"\n📻 **Navidrome:** {nav_icon} {nav_msg}\n"
         )
     _send(bot, accid, event.msg.chat_id, reply)
 
@@ -2196,6 +2242,9 @@ def _get_help_text(bot, accid, from_id):
     elif is_actually_admin:
         fp_suffix = f" ({admin_fp[-8:].upper()})" if admin_fp else ""
         help_text += f"\n👑 **Admin:** `{admin_email}`{fp_suffix}\n"
+        nav_ok, nav_msg = _check_navidrome_status()
+        nav_icon = "🟢" if nav_ok else "🔴" if ("error" in nav_msg.lower() or "failed" in nav_msg.lower()) else "⚪"
+        help_text += f"📻 **Navidrome:** {nav_icon} `{nav_msg}`\n"
         help_text += "\n**Admin Commands:**\n"
         help_text += "/ytms <url> — Save audio to Navidrome library\n"
         help_text += "/ytms_<video_id> — Save audio to Navidrome by ID\n"
@@ -3134,6 +3183,15 @@ def on_start(bot, _args):
             
         # Check cookies asynchronously on startup
         threading.Thread(target=_check_cookies_on_startup, args=(bot,), daemon=True).start()
+
+        # Check Navidrome status asynchronously on startup
+        def _check_navidrome_on_startup():
+            nav_ok, nav_msg = _check_navidrome_status()
+            icon = "✅" if nav_ok else "⚠️"
+            logger.info(f"Navidrome Status: {icon} {nav_msg}")
+            print(f"Navidrome Status: {icon} {nav_msg}")
+
+        threading.Thread(target=_check_navidrome_on_startup, daemon=True).start()
 
         allowed_bots_env = os.environ.get("ALLOWED_BOT_EMAILS", "")
         allowed_bots = [e.strip().lower() for e in allowed_bots_env.split(",") if e.strip()]
