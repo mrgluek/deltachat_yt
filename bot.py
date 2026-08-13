@@ -1481,7 +1481,7 @@ async def _do_ytms(bot, accid, msg, video_id: str):
             f"🔗 {_make_yt_url(video_id)}"
         )
 
-        _send(bot, accid, chat_id, caption, file=filepath)
+        _send(bot, accid, chat_id, caption)
         _react(bot, accid, req_msg_id, "☑️")
         database.add_download(chat_id, msg.from_id, video_id, title, duration, "audio_navidrome", filesize)
 

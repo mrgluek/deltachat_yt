@@ -314,6 +314,50 @@ class TestNavidromeIntegration(unittest.TestCase):
         self.assertIn("Navidrome:", sent_reply)
         self.assertIn("Navidrome v0.54.5", sent_reply)
 
+    @patch("bot._get_navidrome_config")
+    @patch("bot._trigger_subsonic_scan", return_value=(True, "Scan initiated"))
+    @patch("bot._save_to_navidrome")
+    @patch("bot._fetch_video_info_with_fallback")
+    @patch("bot._send")
+    @patch("bot._react")
+    def test_do_ytms_sends_text_without_file_attachment(self, mock_react, mock_send, mock_fetch_info, mock_save, mock_scan, mock_nav_cfg):
+        """Verify _do_ytms sends text confirmation only, without attaching audio file."""
+        mock_nav_cfg.return_value = ("https://music.example.com", "admin", "pwd", None, None, self.temp_dir)
+        mock_save.return_value = (os.path.join(self.temp_dir, "Track.opus"), None)
+
+        async def fake_info(video_id):
+            return {"duration": 120, "extractor": "youtube", "title": "Test Title"}, None, 0
+        mock_fetch_info.side_effect = fake_info
+
+        # Create a cached audio file
+        cache_file = os.path.join(bot.CACHE_DIR, f"{bot._get_cache_id('dummy_vid_123')}.opus")
+        os.makedirs(bot.CACHE_DIR, exist_ok=True)
+        with open(cache_file, "wb") as f:
+            f.write(b"OPUS_DATA")
+
+        mock_bot = MagicMock()
+        mock_msg = MagicMock()
+        mock_msg.id = 111
+        mock_msg.chat_id = 222
+        mock_msg.from_id = 333
+
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(bot._do_ytms(mock_bot, 1, mock_msg, "dummy_vid_123"))
+        finally:
+            loop.close()
+
+        mock_send.assert_called_once()
+        args = mock_send.call_args[0]
+        kwargs = mock_send.call_args[1]
+        self.assertEqual(args[0], mock_bot)
+        self.assertEqual(args[1], 1)
+        self.assertEqual(args[2], 222)
+        self.assertIn("Saved to Navidrome library!", args[3])
+        # Assert file is None / not passed as keyword argument
+        self.assertNotIn("file", kwargs)
+
 
 if __name__ == "__main__":
     unittest.main()
