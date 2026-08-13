@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.20] - 2026-08-13
+
+### Added
+- **Audio File Metadata & Tagging:** Configured `yt-dlp` to automatically embed tags (Title, Artist, Album, Cover Art) into audio files (`--embed-metadata` and `--embed-thumbnail`).
+- **Original Video Link Embedding:** Embeds original video webpage URL into audio file metadata tags (`description` and `comment` fields via `--parse-metadata`), preserving original link in Delta Chat captions.
+
 ## [1.6.19] - 2026-07-27
 
 ### Changed

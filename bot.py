@@ -20,6 +20,8 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
+VERSION = "1.6.20"
+
 dc_cli = BotCli("ytbot")
 
 # Global references
@@ -1062,6 +1064,10 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
     cmd.extend([
         "-x",
         "--audio-format", fmt,
+        "--embed-metadata",
+        "--embed-thumbnail",
+        "--parse-metadata", "%(webpage_url)s:%(meta_comment)s",
+        "--parse-metadata", "%(webpage_url)s:%(meta_description)s",
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
         "--js-runtimes", "deno:/root/.deno/bin/deno",

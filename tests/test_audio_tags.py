@@ -1,0 +1,93 @@
+import os
+import sys
+import unittest
+from unittest.mock import MagicMock, patch
+
+# Ensure deltachat2 and deltabot_cli can be imported even if not installed in CI environment
+sys.modules.setdefault('deltachat2', MagicMock())
+sys.modules.setdefault('deltabot_cli', MagicMock())
+
+# Import database and bot
+import database
+import bot
+
+
+class TestYTBotAudioTags(unittest.IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        self.test_db = "test_ytbot.db"
+        database.DB_PATH = self.test_db
+        database.init_db()
+
+    def tearDown(self):
+        if os.path.exists(self.test_db):
+            try:
+                os.remove(self.test_db)
+            except OSError:
+                pass
+        for sidecar in [f"{self.test_db}-wal", f"{self.test_db}-shm"]:
+            if os.path.exists(sidecar):
+                try:
+                    os.remove(sidecar)
+                except OSError:
+                    pass
+
+    def test_version_constant(self):
+        """Test that bot.VERSION constant is set to 1.6.20."""
+        self.assertTrue(hasattr(bot, "VERSION"))
+        self.assertEqual(bot.VERSION, "1.6.20")
+
+    def test_database_config_roundtrip(self):
+        """Test set_config and get_config in database."""
+        database.set_config("resilient", "1")
+        self.assertEqual(database.get_config("resilient"), "1")
+        
+        database.set_config("resilient", "0")
+        self.assertEqual(database.get_config("resilient"), "0")
+
+    def test_database_downloads(self):
+        """Test recording a download in the database."""
+        database.add_download(123, 456, "dQw4w9WgXcQ", "Never Gonna Give You Up", 212, "audio", 1048576)
+        # Verify database insertion
+        conn = database.sqlite3.connect(self.test_db)
+        cursor = conn.cursor()
+        cursor.execute("SELECT video_id, title, download_type FROM downloads WHERE chat_id = ?", (123,))
+        row = cursor.fetchone()
+        conn.close()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], "dQw4w9WgXcQ")
+        self.assertEqual(row[1], "Never Gonna Give You Up")
+        self.assertEqual(row[2], "audio")
+
+    @patch("asyncio.create_subprocess_exec")
+    async def test_download_audio_tag_options(self, mock_subprocess):
+        """Verify yt-dlp audio download command includes metadata, thumbnail, and parse-metadata flags."""
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        
+        async def fake_communicate():
+            return (b'{"_filename": "/tmp/test.opus", "title": "Test Track"}', b'')
+            
+        mock_proc.communicate = fake_communicate
+        mock_subprocess.return_value = mock_proc
+
+        filepath, info, err = await bot._download_audio(
+            video_id="dQw4w9WgXcQ",
+            output_dir="/tmp",
+            duration=180,
+            use_cookies=False,
+            custom_proxy=None
+        )
+
+        mock_subprocess.assert_called_once()
+        cmd_args = list(mock_subprocess.call_args[0])
+
+        self.assertIn("--embed-metadata", cmd_args)
+        self.assertIn("--embed-thumbnail", cmd_args)
+        self.assertIn("--parse-metadata", cmd_args)
+        self.assertIn("%(webpage_url)s:%(meta_comment)s", cmd_args)
+        self.assertIn("%(webpage_url)s:%(meta_description)s", cmd_args)
+
+
+if __name__ == "__main__":
+    unittest.main()
