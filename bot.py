@@ -2173,6 +2173,7 @@ def _get_help_text(bot, accid, from_id):
 
     help_text = (
         f"👋 Hi {sender_email}!\n\n"
+        f"🤖 **YouTube Bot v{VERSION}**\n"
         f"I download YouTube videos and audio.\n\n"
         f"**Commands:**\n"
         f"/yt <url> — Download video (MP4 360-480p, ≤{MAX_FILESIZE_MB}MB)\n"
@@ -2879,7 +2880,7 @@ def on_msg_failed(bot, accid, event):
 @dc_cli.on_init
 def on_init(bot, args):
     global dc_bot_instance, dc_accid
-    bot.logger.info("Initializing YT Bot...")
+    bot.logger.info(f"Initializing Delta Chat YouTube Bot v{VERSION}...")
     dc_bot_instance = bot
     _setup_resilient_mode(bot)
     
@@ -3119,6 +3120,8 @@ def on_start(bot, _args):
     global dc_bot_instance, dc_accid
     setup_custom_command_parser(bot, ["yt"])
     dc_bot_instance = bot
+    bot.logger.info(f"Starting Delta Chat YouTube Bot v{VERSION}...")
+    print(f"\n🤖 Delta Chat YouTube Bot v{VERSION}")
     accounts = bot.rpc.get_all_account_ids()
     if accounts:
         dc_accid = accounts[0]
