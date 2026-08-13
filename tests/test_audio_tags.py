@@ -55,7 +55,7 @@ class TestYTBotAudioTags(unittest.IsolatedAsyncioTestCase):
     def test_version_constant(self):
         """Test that bot.VERSION constant is set."""
         self.assertTrue(hasattr(bot, "VERSION"))
-        self.assertEqual(bot.VERSION, "1.6.22")
+        self.assertEqual(bot.VERSION, "1.6.23")
 
     def test_database_config_roundtrip(self):
         """Test set_config and get_config in database."""
@@ -78,6 +78,35 @@ class TestYTBotAudioTags(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row[0], "dQw4w9WgXcQ")
         self.assertEqual(row[1], "Never Gonna Give You Up")
         self.assertEqual(row[2], "audio")
+
+    def test_tag_audio_file_mp3(self):
+        """Test tagging MP3 file with ID3 tags using mutagen."""
+        dummy_mp3 = "dummy_test.mp3"
+        with open(dummy_mp3, "wb") as f:
+            f.write(b"MP3_DATA")
+        try:
+            mock_mutagen = MagicMock()
+            mock_id3 = MagicMock()
+            mock_mutagen.id3.ID3.return_value = mock_id3
+
+            info = {
+                "title": "Tropical Trip",
+                "artist": "Suduaya",
+                "album": "Singles",
+                "year": "2024",
+                "lyrics": "Sample lyrics"
+            }
+
+            with patch.dict(sys.modules, {"mutagen": mock_mutagen, "mutagen.id3": mock_mutagen.id3}):
+                bot._tag_audio_file(dummy_mp3, info, webpage_url="https://music.yandex.ru/track/153461847")
+                mock_id3.save.assert_called_once()
+                self.assertIn("TIT2", mock_id3.__setitem__.call_args_list[0][0][0])
+                self.assertIn("TPE1", mock_id3.__setitem__.call_args_list[1][0][0])
+                self.assertIn("TPE2", mock_id3.__setitem__.call_args_list[2][0][0])
+                self.assertIn("TALB", mock_id3.__setitem__.call_args_list[3][0][0])
+        finally:
+            if os.path.exists(dummy_mp3):
+                os.remove(dummy_mp3)
 
     @patch("asyncio.create_subprocess_exec")
     async def test_download_audio_tag_options(self, mock_subprocess):

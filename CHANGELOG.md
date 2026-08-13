@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.23] - 2026-08-14
+
+### Fixed
+- **Yandex Music & Audio Metadata Tagging:** Added `_tag_audio_file` using `mutagen` to embed ID3v2.3 tags (`TIT2` Title, `TPE1` Artist, `TPE2` Album Artist, `TALB` Album, `TDRC` Year, `APIC` Cover Art, `USLT` Lyrics, and URL comments) into MP3 downloads from Yandex Music and ensure full metadata tagging across all formats.
+- **Yandex Music Album & Lyrics Extraction:** Updated `_fetch_yandex_metadata` to extract album title (`track.albums`), release year, and track lyrics from Yandex Music API.
+
 ## [1.6.22] - 2026-08-14
 
 ### Added

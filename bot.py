@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.22"
+VERSION = "1.6.23"
 
 dc_cli = BotCli("ytbot")
 
@@ -301,10 +301,25 @@ def _fetch_yandex_metadata(track_id: str, token: str) -> dict:
         artists = [a.name for a in track.artists if a.name]
         artist_str = ", ".join(artists) if artists else "Unknown Artist"
         
+        albums = [al.title for al in track.albums if al.title]
+        album_str = albums[0] if albums else "Singles"
+        
+        year = None
+        if track.albums and getattr(track.albums[0], 'year', None):
+            year = str(track.albums[0].year)
+            
         cover_url = None
         if track.cover_uri:
             cover_url = "https://" + track.cover_uri.replace("%%", "400x400")
             
+        lyrics_text = None
+        try:
+            supplement = track.get_supplement()
+            if supplement and supplement.lyrics:
+                lyrics_text = supplement.lyrics.full_lyrics
+        except Exception:
+            pass
+
         return {
             "id": track_id,
             "title": track.title,
@@ -312,6 +327,9 @@ def _fetch_yandex_metadata(track_id: str, token: str) -> dict:
             "thumbnail": cover_url,
             "artist": artist_str,
             "uploader": artist_str,
+            "album": album_str,
+            "year": year,
+            "lyrics": lyrics_text,
             "ext": "mp3",
             "extractor": "yandexmusic",
         }
@@ -1058,6 +1076,150 @@ def _embed_lyrics_in_audio(audio_path: str, lyrics_text: str):
         logger.warning(f"Could not embed lyrics into {audio_path}: {e}")
 
 
+def _tag_audio_file(filepath: str, info: dict, webpage_url: str = None):
+    """Embed comprehensive metadata tags (Title, Artist, Album, Album Artist, Year, Cover Art, URL, Lyrics) into audio file."""
+    if not filepath or not os.path.exists(filepath) or not info:
+        return
+    try:
+        import mutagen
+        ext = os.path.splitext(filepath)[1].lower()
+        title = info.get("track") or info.get("title") or ""
+        artist = info.get("artist") or info.get("uploader") or info.get("channel") or info.get("creator") or ""
+        album = info.get("album") or "Singles"
+        year = str(info.get("release_year") or info.get("year") or "")
+        lyrics = info.get("lyrics") or ""
+        url = webpage_url or info.get("webpage_url") or ""
+
+        # Fetch cover bytes if thumbnail URL is provided
+        cover_bytes = None
+        thumbnail_url = info.get("thumbnail")
+        if thumbnail_url and (thumbnail_url.startswith("http://") or thumbnail_url.startswith("https://")):
+            try:
+                req = urllib.request.Request(thumbnail_url, headers={'User-Agent': 'DeltaChatYTBot/1.0'})
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    cover_bytes = r.read()
+            except Exception as e:
+                logger.debug(f"Could not download thumbnail for audio tagging from {thumbnail_url}: {e}")
+
+        if ext == ".mp3":
+            from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TDRC, COMM, APIC, USLT, ID3NoHeaderError
+            try:
+                tags = ID3(filepath)
+            except ID3NoHeaderError:
+                tags = ID3()
+            if title:
+                tags["TIT2"] = TIT2(encoding=3, text=title)
+            if artist:
+                tags["TPE1"] = TPE1(encoding=3, text=artist)
+                tags["TPE2"] = TPE2(encoding=3, text=artist)  # Album Artist
+            if album:
+                tags["TALB"] = TALB(encoding=3, text=album)
+            if year:
+                tags["TDRC"] = TDRC(encoding=3, text=year)
+            if url:
+                tags["COMM:desc:eng"] = COMM(encoding=3, lang='eng', desc='description', text=url)
+                tags["COMM::eng"] = COMM(encoding=3, lang='eng', desc='', text=url)
+            if lyrics:
+                tags.delall("USLT")
+                tags.add(USLT(encoding=3, lang='eng', desc='', text=lyrics))
+            if cover_bytes:
+                tags.delall("APIC")
+                tags.add(APIC(
+                    encoding=3,
+                    mime='image/jpeg',
+                    type=3,  # Front cover
+                    desc='Cover',
+                    data=cover_bytes
+                ))
+            tags.save(filepath, v2_version=3)
+            logger.info(f"Successfully tagged MP3 with ID3v2.3: {filepath}")
+
+        elif ext in (".opus", ".ogg"):
+            from mutagen.oggopus import OggOpus
+            from mutagen.flac import Picture
+            import base64
+            audio = OggOpus(filepath)
+            if title:
+                audio["title"] = title
+            if artist:
+                audio["artist"] = artist
+                audio["albumartist"] = artist
+            if album:
+                audio["album"] = album
+            if year:
+                audio["date"] = year
+            if url:
+                audio["description"] = url
+                audio["comment"] = url
+            if lyrics:
+                audio["lyrics"] = lyrics
+                audio["unsyncedlyrics"] = lyrics
+            if cover_bytes:
+                try:
+                    pic = Picture()
+                    pic.data = cover_bytes
+                    pic.type = 3
+                    pic.mime = "image/jpeg"
+                    pic.desc = "Cover"
+                    audio["metadata_block_picture"] = [base64.b64encode(pic.write()).decode("ascii")]
+                except Exception as e:
+                    logger.debug(f"Could not embed picture in Vorbis comments: {e}")
+            audio.save()
+            logger.info(f"Successfully tagged Opus with Vorbis comments: {filepath}")
+
+        elif ext in (".m4a", ".mp4"):
+            from mutagen.mp4 import MP4, MP4Cover
+            audio = MP4(filepath)
+            if title:
+                audio["\xa9nam"] = title
+            if artist:
+                audio["\xa9ART"] = artist
+                audio["aART"] = artist
+            if album:
+                audio["\xa9alb"] = album
+            if year:
+                audio["\xa9day"] = year
+            if url:
+                audio["\xa9des"] = url
+                audio["\xa9cmt"] = url
+            if lyrics:
+                audio["\xa9lyr"] = lyrics
+            if cover_bytes:
+                audio["covr"] = [MP4Cover(cover_bytes, imageformat=MP4Cover.FORMAT_JPEG)]
+            audio.save()
+            logger.info(f"Successfully tagged MP4/M4A: {filepath}")
+
+        elif ext == ".flac":
+            from mutagen.flac import FLAC, Picture
+            audio = FLAC(filepath)
+            if title:
+                audio["title"] = title
+            if artist:
+                audio["artist"] = artist
+                audio["albumartist"] = artist
+            if album:
+                audio["album"] = album
+            if year:
+                audio["date"] = year
+            if url:
+                audio["description"] = url
+                audio["comment"] = url
+            if lyrics:
+                audio["lyrics"] = lyrics
+            if cover_bytes:
+                pic = Picture()
+                pic.data = cover_bytes
+                pic.type = 3
+                pic.mime = "image/jpeg"
+                pic.desc = "Cover"
+                audio.add_picture(pic)
+            audio.save()
+            logger.info(f"Successfully tagged FLAC: {filepath}")
+
+    except Exception as e:
+        logger.warning(f"Error tagging audio file {filepath}: {e}")
+
+
 def _process_subtitles_and_lyrics(output_dir: str, safe_id: str, audio_path: str) -> tuple[str | None, str | None]:
     """
     Discovers downloaded subtitles in output_dir, converts to standardized .lrc,
@@ -1165,7 +1327,17 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                         os.remove(filepath)
                     except:
                         pass
-                    filepath = trimmed_filepath
+            # Tag the audio file with Title, Artist, Album, Album Artist, Year, Cover Art, URL, Lyrics
+            _tag_audio_file(filepath, info, webpage_url=url)
+            
+            # If lyrics are present from Yandex Music, also generate companion .lrc file in output_dir
+            if info.get("lyrics"):
+                lrc_path = os.path.join(output_dir, f"{safe_id}.lrc")
+                if not os.path.exists(lrc_path):
+                    lrc_content = _convert_subtitles_to_lrc(info["lyrics"])
+                    if lrc_content:
+                        with open(lrc_path, "w", encoding="utf-8") as f:
+                            f.write(lrc_content)
 
             return filepath, info, None
         except Exception as e:
@@ -1285,6 +1457,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         if filepath and os.path.exists(filepath):
             # Process and embed lyrics into audio file & generate standardized .lrc
             _process_subtitles_and_lyrics(output_dir, safe_id, filepath)
+            # Ensure comprehensive tags and cover art are embedded
+            _tag_audio_file(filepath, info, webpage_url=_make_yt_url(video_id))
             if start_time or end_time:
                 ext = os.path.splitext(filepath)[1]
                 trimmed_filepath = os.path.splitext(filepath)[0] + f"_trimmed{ext}"
