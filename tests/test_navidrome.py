@@ -58,8 +58,8 @@ class TestNavidromeIntegration(unittest.TestCase):
                     pass
 
     def test_version_bumped(self):
-        """Test bot.VERSION is 1.6.29."""
-        self.assertEqual(bot.VERSION, "1.6.29")
+        """Test bot.VERSION is 1.6.30."""
+        self.assertEqual(bot.VERSION, "1.6.30")
 
     def test_sanitize_filename(self):
         """Test filename sanitization for various edge cases and illegal characters."""

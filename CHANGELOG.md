@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.30] - 2026-08-18
+
+### Fixed
+- **Conditional Mobile Player Client on 403 Forbidden:**
+  - Standardized `yt-dlp` to run with normal default client configurations for all standard videos and playlists to prevent regressions.
+  - Added automatic targeted fallback to `player_client=android,ios,web` specifically upon encountering `HTTP Error 403: Forbidden`, seamlessly bypassing VEVO/SABR restrictions on music without affecting normal videos.
+
 ## [1.6.29] - 2026-08-18
 
 ### Fixed

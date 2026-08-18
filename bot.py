@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.29"
+VERSION = "1.6.30"
 
 dc_cli = BotCli("ytbot")
 
@@ -740,7 +740,7 @@ def _clean_error(err: str) -> str:
         return "This video is not available in the bot's country/region."
     return err
 
-async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_proxy: str = None) -> tuple[dict | None, str | None]:
+async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_proxy: str = None, player_client: str = None) -> tuple[dict | None, str | None]:
     """Fetch video metadata without downloading. Returns (info, error_msg)."""
     url = _make_yt_url(video_id)
     if "music.yandex." in url:
@@ -762,12 +762,13 @@ async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_prox
     cmd = [
         "yt-dlp", "--no-playlist", "--dump-json", "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
-        "--extractor-args", "youtube:player_client=android,ios,web",
         "--js-runtimes", "deno:/root/.deno/bin/deno",
         "--no-cache-dir",
         "--no-config",
         "--add-header", "Accept-Language: en-US,en;q=0.9",
     ]
+    if player_client:
+        cmd.extend(["--extractor-args", f"youtube:player_client={player_client}"])
     
     active_proxy = custom_proxy if custom_proxy is not None else PROXY
     if "yandex." in url and YANDEX_PROXY and custom_proxy is None:
@@ -792,6 +793,10 @@ async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_prox
         
         err = stderr.decode(errors='replace').strip()
         cleaned_err = _clean_error(err)
+        if not player_client and ("403" in err or "Forbidden" in err):
+            logger.info(f"Received 403 Forbidden for info fetch on {video_id}. Retrying with mobile player_client...")
+            return await _fetch_video_info(video_id, use_cookies=use_cookies, custom_proxy=custom_proxy, player_client="android,ios,web")
+
         logger.warning(f"yt-dlp info fetch failed for {video_id}: {err}")
         return None, cleaned_err[:200]
     except asyncio.TimeoutError:
@@ -832,7 +837,7 @@ async def _fetch_video_info_with_fallback(video_id: str) -> tuple[dict | None, s
     return info, error, successful_idx
 
 
-async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None) -> tuple[str | None, dict | None, str | None]:
+async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None, player_client: str = None) -> tuple[str | None, dict | None, str | None]:
     """Download video. Returns (filepath, info_dict, error_string)."""
     out_template = os.path.join(output_dir, "%(id)s_%(title).50s.%(ext)s")
     if start_time or end_time:
@@ -851,7 +856,6 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "--merge-output-format", "mp4",
         "--no-abort-on-error",
         "--ignore-errors",
-        "--extractor-args", "youtube:player_client=android,ios,web",
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
         "--js-runtimes", "deno:/root/.deno/bin/deno",
@@ -861,6 +865,8 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "--print-json",
         "-o", out_template,
     ])
+    if player_client:
+        cmd.extend(["--extractor-args", f"youtube:player_client={player_client}"])
     
     url = _make_yt_url(video_id)
     active_proxy = custom_proxy if custom_proxy is not None else PROXY
@@ -885,6 +891,10 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
 
         if proc.returncode != 0:
             err = stderr.decode(errors='replace').strip()
+            if not player_client and ("403" in err or "Forbidden" in err):
+                logger.info(f"Received 403 Forbidden downloading video for {video_id}. Retrying with mobile player_client...")
+                return await _download_video(video_id, output_dir, max_height, start_time, end_time, use_cookies=use_cookies, custom_proxy=custom_proxy, player_client="android,ios,web")
+
             if "duration" in err.lower() or "filter" in err.lower():
                 return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
             if "max-filesize" in err.lower() or "filesize" in err.lower() or "requested format" in err.lower() or "not available" in err.lower():
@@ -1272,7 +1282,7 @@ def _process_subtitles_and_lyrics(output_dir: str, safe_id: str, audio_path: str
         return None, None
 
 
-async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None) -> tuple[str | None, dict | None, str | None]:
+async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None, player_client: str = None) -> tuple[str | None, dict | None, str | None]:
     url = _make_yt_url(video_id)
     if "music.yandex." in url:
         token = os.getenv("YANDEX_TOKEN")
@@ -1311,17 +1321,17 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                         pass
                     filepath = opus_filepath
 
-            # Handle trimming if start_time or end_time is requested
+            # If trimming was requested, trim now
             if start_time or end_time:
                 ext = os.path.splitext(filepath)[1]
-                trimmed_filepath = os.path.splitext(filepath)[0] + f"_trimmed{ext}"
-                trim_duration = (end_time - (start_time or 0)) if end_time else None
-                trim_cmd = [
-                    "ffmpeg", "-y", "-nostdin"
-                ]
+                trimmed_filepath = os.path.join(output_dir, f"{safe_id}_trimmed{ext}")
+                trim_cmd = ["ffmpeg", "-y", "-nostdin"]
                 if start_time:
                     trim_cmd.extend(["-ss", str(start_time)])
                 trim_cmd.extend(["-i", filepath])
+                trim_duration = None
+                if end_time:
+                    trim_duration = end_time - (start_time or 0)
                 if trim_duration is not None:
                     trim_cmd.extend(["-t", str(trim_duration)])
                 trim_cmd.extend([
@@ -1337,6 +1347,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                         os.remove(filepath)
                     except:
                         pass
+                    filepath = trimmed_filepath
+
             # Tag the audio file with Title, Artist, Album, Album Artist, Year, Cover Art, URL, Lyrics
             _tag_audio_file(filepath, info, webpage_url=url)
             
@@ -1373,7 +1385,10 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         # For long audio (> 10 min), transcode and compress to Opus 64k mono to stay under 30MB limit
         fmt = "opus"
         format_selector = None
-        pp_args = ["--postprocessor-args", "ffmpeg:-ac 1 -ar 24000 -b:a 64k"]
+        pp_args = [
+            "--postprocessor-args",
+            "ffmpeg:-ac 1 -ar 24000 -b:a 64k"
+        ]
 
     safe_id = _get_cache_id(video_id)
     out_template = os.path.join(output_dir, f"{safe_id}.%(ext)s")
@@ -1401,7 +1416,6 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         "--convert-subs", "lrc",
         "--no-abort-on-error",
         "--ignore-errors",
-        "--extractor-args", "youtube:player_client=android,ios,web",
         "--parse-metadata", "%(webpage_url)s:%(meta_comment)s",
         "--parse-metadata", "%(webpage_url)s:%(meta_description)s",
         "--no-warnings",
@@ -1413,6 +1427,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         "--print-json",
         "-o", out_template,
     ])
+    if player_client:
+        cmd.extend(["--extractor-args", f"youtube:player_client={player_client}"])
     if pp_args:
         cmd.extend(pp_args)
     
@@ -1436,6 +1452,10 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
 
         if proc.returncode != 0:
             err = stderr.decode(errors='replace').strip()
+            if not player_client and ("403" in err or "Forbidden" in err):
+                logger.info(f"Received 403 Forbidden downloading audio for {video_id}. Retrying with mobile player_client...")
+                return await _download_audio(video_id, output_dir, duration, start_time=start_time, end_time=end_time, use_cookies=use_cookies, custom_proxy=custom_proxy, player_client="android,ios,web")
+
             if "duration" in err.lower() or "filter" in err.lower():
                 return None, None, f"⏱ Audio is longer than {MAX_DURATION_AUDIO // 60} minutes"
             
