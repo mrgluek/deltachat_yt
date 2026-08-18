@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.24] - 2026-08-18
+
+### Added
+- **YouTube & Yandex Music Account Status Diagnostics in `/stats`:**
+  - Added real-time account status checks for **YouTube** (`▶️ **YouTube:**`) and **Yandex Music** (`🎵 **Yandex Music:**`) in the admin section of `/stats` right above Navidrome.
+  - Verifies YouTube session authentication against `data/cookies.txt`, detecting active login sessions, user/channel handles, expired cookies, and YouTube bot-detection challenges ("The page needs to be reloaded").
+  - Verifies Yandex Music status via `YANDEX_TOKEN` or `data/cookies.txt`, checking subscription status and account display names.
+- **Startup Account Diagnostics:**
+  - Automatically verifies and logs YouTube and Yandex Music account status during startup.
+- **Improved Error Messages:**
+  - Added user-friendly formatting in `_clean_error` for YouTube "The page needs to be reloaded" (expired/flagged cookies) and HTTP 403 Forbidden errors.
+
 ## [1.6.23] - 2026-08-14
 
 ### Fixed

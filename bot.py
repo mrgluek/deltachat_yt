@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.23"
+VERSION = "1.6.24"
 
 dc_cli = BotCli("ytbot")
 
@@ -726,6 +726,10 @@ def _clean_error(err: str) -> str:
     if not err:
         return "Unknown error"
     err_lower = err.lower()
+    if "the page needs to be reloaded" in err_lower:
+        return "YouTube error: The page needs to be reloaded (cookies in data/cookies.txt may be expired, invalid, or flagged by YouTube bot protection)."
+    if "unable to download video data: http error 403: forbidden" in err_lower or "http error 403: forbidden" in err_lower:
+        return "YouTube error: HTTP Error 403: Forbidden (access blocked by YouTube bot protection/IP restriction)."
     if "argument of type 'bool'" in err_lower:
         return "Yandex Music error: Content is unavailable (might be restricted to Russia/CIS, require a subscription, or Yandex is captcha-blocking the request)."
     if "uploader has not made this video available in your country" in err_lower:
@@ -1586,6 +1590,203 @@ def _trigger_subsonic_scan(server_url: str, user: str, password: str = None, tok
     except Exception as e:
         logger.error(f"Error triggering Navidrome scan at {base_url}: {e}")
         return False, f"Connection failed: {e}"
+
+
+def _check_youtube_status() -> tuple[bool, str]:
+    """Check YouTube cookie configuration, authentication, and session status."""
+    cookies_path = os.path.join("data", "cookies.txt")
+    if not os.path.exists(cookies_path):
+        return False, "Guest mode (no cookies.txt configured)"
+
+    import http.cookiejar
+    cookie_jar = http.cookiejar.MozillaCookieJar(cookies_path)
+    try:
+        cookie_jar.load(ignore_discard=True, ignore_expires=True)
+    except Exception as e:
+        return False, f"Failed to parse data/cookies.txt: {e}"
+
+    # Check for YouTube / Google cookies
+    yt_cookies = [c for c in cookie_jar if "youtube.com" in c.domain or "google.com" in c.domain]
+    if not yt_cookies:
+        return False, "Guest mode (cookies.txt loaded, but contains no YouTube cookies)"
+
+    # Check for login session cookies
+    login_cookies = [c for c in yt_cookies if c.name in ("LOGIN_INFO", "SAPISID", "SID", "SSID", "__Secure-1PAPISID", "__Secure-3PAPISID", "__Secure-1PSID", "__Secure-3PSID")]
+    if not login_cookies:
+        return False, "Guest mode (cookies loaded, but no active login session tokens found)"
+
+    handlers = [urllib.request.HTTPCookieProcessor(cookie_jar)]
+    active_proxy = PROXY
+    if active_proxy:
+        handlers.append(urllib.request.ProxyHandler({'http': active_proxy, 'https': active_proxy}))
+    opener = urllib.request.build_opener(*handlers)
+    opener.addheaders = [
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        ("Accept-Language", "en-US,en;q=0.9"),
+        ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    ]
+
+    try:
+        req = urllib.request.Request("https://www.youtube.com/")
+        with opener.open(req, timeout=10) as response:
+            html = response.read().decode('utf-8', errors='replace')
+            
+            # Check for YouTube bot-block / reload challenge
+            if "The page needs to be reloaded" in html:
+                return False, 'Session EXPIRED or FLAGGED ("The page needs to be reloaded")'
+            
+            if "captcha" in html.lower() or "recaptcha" in html.lower() or "consent.youtube.com" in response.geturl():
+                return False, "CAPTCHA / verification challenge required"
+
+            # Check if session is logged in
+            is_logged_in = False
+            if re.search(r'["\']LOGGED_IN["\']\s*:\s*true', html, re.IGNORECASE):
+                is_logged_in = True
+            elif re.search(r'ytcfg\.set\(.*["\']LOGGED_IN["\']\s*:\s*true', html, re.DOTALL | re.IGNORECASE):
+                is_logged_in = True
+
+            if not is_logged_in and re.search(r'["\']LOGGED_IN["\']\s*:\s*false', html, re.IGNORECASE):
+                return False, "Session EXPIRED or INVALID (logged out)"
+
+            # Try to extract account/channel name or handle
+            account_name = None
+            patterns = [
+                r'"accountName"\s*:\s*\{\s*"simpleText"\s*:\s*"([^"]+)"',
+                r'"channelHandle"\s*:\s*"(@[^"]+)"',
+                r'"avatar"\s*:\s*\{[^}]*"accessibility"\s*:\s*\{\s*"accessibilityData"\s*:\s*\{\s*"label"\s*:\s*"Account profile photo[^"]*for\s+([^"]+)"',
+                r'"avatar"\s*:\s*\{[^}]*"accessibility"\s*:\s*\{\s*"accessibilityData"\s*:\s*\{\s*"label"\s*:\s*"([^"]+)"',
+                r'"USER_NAME"\s*:\s*"([^"]+)"',
+            ]
+            for pat in patterns:
+                m = re.search(pat, html)
+                if m:
+                    candidate = m.group(1).strip()
+                    if candidate and not candidate.startswith("Account profile"):
+                        account_name = candidate
+                        break
+
+            if account_name:
+                return True, f"Logged in as {account_name}"
+            elif is_logged_in:
+                return True, "Session ACTIVE (Logged in)"
+            else:
+                return True, "Cookies loaded (Tokens present)"
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return False, "HTTP 403 Forbidden (Blocked/Rate-limited by YouTube)"
+        if e.code in (301, 302, 303, 307):
+            return False, "Session EXPIRED (Redirected to login)"
+        return False, f"HTTP Error {e.code}: {e.reason}"
+    except Exception as e:
+        return False, f"Connection check failed ({e})"
+
+
+def _check_yandex_status() -> tuple[bool, str]:
+    """Check Yandex Music authentication and Plus subscription status."""
+    global _active_yandex_tld
+
+    token = os.getenv("YANDEX_TOKEN")
+    if token:
+        try:
+            from yandex_music import Client
+            yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+            old_http = os.environ.get("HTTP_PROXY")
+            old_https = os.environ.get("HTTPS_PROXY")
+            if yandex_proxy:
+                os.environ["HTTP_PROXY"] = yandex_proxy
+                os.environ["HTTPS_PROXY"] = yandex_proxy
+            try:
+                client = Client(token).init()
+                status = client.account_status()
+                display_name = getattr(getattr(client, 'me', None), 'account', None)
+                name = getattr(display_name, 'display_name', None) or getattr(display_name, 'login', None) or "User"
+                if status.plus.has_plus:
+                    _active_yandex_tld = 'ru'
+                    return True, f"Plus ACTIVE via YANDEX_TOKEN (Account: {name})"
+                else:
+                    return False, f"Plus INACTIVE via YANDEX_TOKEN (Account: {name})"
+            finally:
+                if old_http is not None:
+                    os.environ["HTTP_PROXY"] = old_http
+                else:
+                    os.environ.pop("HTTP_PROXY", None)
+                if old_https is not None:
+                    os.environ["HTTPS_PROXY"] = old_https
+                else:
+                    os.environ.pop("HTTPS_PROXY", None)
+        except Exception as e:
+            return False, f"Token verification failed ({e})"
+
+    cookies_path = os.path.join("data", "cookies.txt")
+    if not os.path.exists(cookies_path):
+        return False, "Not configured (guest mode)"
+
+    import http.cookiejar
+    cookie_jar = http.cookiejar.MozillaCookieJar(cookies_path)
+    try:
+        cookie_jar.load(ignore_discard=True, ignore_expires=True)
+    except Exception as e:
+        return False, f"Failed to parse data/cookies.txt: {e}"
+
+    yandex_cookies = [cookie for cookie in cookie_jar if "yandex" in cookie.domain]
+    if not yandex_cookies:
+        return False, "Not configured (no Yandex cookies in cookies.txt)"
+
+    # Gather Yandex domains present in cookies
+    yandex_tlds = set()
+    for cookie in cookie_jar:
+        m = re.search(r'\byandex\.(ru|by|kz|uz|com)\b', cookie.domain)
+        if m:
+            yandex_tlds.add(m.group(1))
+
+    tlds_to_try = list(yandex_tlds) if yandex_tlds else ['ru', 'by', 'kz', 'uz', 'com']
+
+    handlers = [urllib.request.HTTPCookieProcessor(cookie_jar)]
+    active_proxy = YANDEX_PROXY or PROXY
+    if active_proxy:
+        handlers.append(urllib.request.ProxyHandler({'http': active_proxy, 'https': active_proxy}))
+    opener = urllib.request.build_opener(*handlers)
+    opener.addheaders = [
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        ("Referer", "https://music.yandex.ru/"),
+        ("X-Requested-With", "XMLHttpRequest")
+    ]
+
+    last_err = None
+    for tld in tlds_to_try:
+        try:
+            req = urllib.request.Request(f"https://music.yandex.{tld}/handlers/library.jsx")
+            with opener.open(req, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                owner = data.get("owner", {})
+                login = owner.get("login")
+                name = owner.get("name") or login or "User"
+
+                # Check a test track to verify plus/access on this domain
+                track_req = urllib.request.Request(f"https://music.yandex.{tld}/handlers/track.jsx?track=150402031:41648883")
+                with opener.open(track_req, timeout=10) as tr_response:
+                    tr_data = json.loads(tr_response.read().decode('utf-8'))
+                    if "track" in tr_data:
+                        _active_yandex_tld = tld
+                        return True, f"Plus ACTIVE on music.yandex.{tld} (Account: {name})"
+                    else:
+                        return False, f"Logged in on music.yandex.{tld} as {name} (Plus INACTIVE)"
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode('utf-8', errors='replace')
+                if "captcha" in body.lower() or ("запросы" in body and "автоматические" in body):
+                    last_err = f"CAPTCHA blocked on .{tld}"
+                    continue
+            except Exception:
+                pass
+            if e.code == 404:
+                last_err = f"Session not found on .{tld}"
+            else:
+                last_err = f"HTTP {e.code} on .{tld}"
+        except Exception as e:
+            last_err = str(e)
+
+    return False, f"Cookies EXPIRED, INVALID or BLOCKED ({last_err or 'unknown error'})"
 
 
 def _check_navidrome_status() -> tuple[bool, str]:
@@ -2515,12 +2716,20 @@ def stats_command(bot, accid, event):
     )
 
     if is_admin:
+        yt_ok, yt_msg = _check_youtube_status()
+        yt_icon = "🟢" if yt_ok else "🔴" if ("expired" in yt_msg.lower() or "error" in yt_msg.lower() or "flagged" in yt_msg.lower() or "failed" in yt_msg.lower() or "blocked" in yt_msg.lower() or "captcha" in yt_msg.lower()) else "⚪"
+
+        ym_ok, ym_msg = _check_yandex_status()
+        ym_icon = "🟢" if ym_ok else "🟡" if "inactive" in ym_msg.lower() else "🔴" if ("expired" in ym_msg.lower() or "error" in ym_msg.lower() or "failed" in ym_msg.lower() or "blocked" in ym_msg.lower() or "captcha" in ym_msg.lower()) else "⚪"
+
         nav_ok, nav_msg = _check_navidrome_status()
         nav_icon = "🟢" if nav_ok else "🔴" if ("error" in nav_msg.lower() or "failed" in nav_msg.lower()) else "⚪"
         reply += (
             f"\n💾 **Disk Space (Admin only)**\n"
             f"Free: {free_gb:.1f} GB of {total_gb:.1f} GB ({free_pct:.1f}%)\n"
-            f"\n📻 **Navidrome:** {nav_icon} {nav_msg}\n"
+            f"\n▶️ **YouTube:** {yt_icon} {yt_msg}\n"
+            f"🎵 **Yandex Music:** {ym_icon} {ym_msg}\n"
+            f"📻 **Navidrome:** {nav_icon} {nav_msg}\n"
         )
     _send(bot, accid, event.msg.chat_id, reply)
 
@@ -3313,125 +3522,18 @@ def on_init(bot, args):
 
 
 def _check_cookies_on_startup(bot):
-    global _active_yandex_tld
-    
-    token = os.getenv("YANDEX_TOKEN")
-    if token:
-        bot.logger.info("Yandex Music: Verifying status using YANDEX_TOKEN...")
-        try:
-            from yandex_music import Client
-            yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
-            old_http = os.environ.get("HTTP_PROXY")
-            old_https = os.environ.get("HTTPS_PROXY")
-            if yandex_proxy:
-                os.environ["HTTP_PROXY"] = yandex_proxy
-                os.environ["HTTPS_PROXY"] = yandex_proxy
-            try:
-                client = Client(token).init()
-                status = client.account_status()
-                if status.plus.has_plus:
-                    bot.logger.info(f"Yandex Music check: ✅ Yandex Plus subscription is ACTIVE via YANDEX_TOKEN (Account: {client.me.account.display_name})!")
-                    _active_yandex_tld = 'ru'
-                    return
-                else:
-                    bot.logger.warning("Yandex Music check: ⚠️ Yandex Plus subscription is INACTIVE or missing on the provided token.")
-            finally:
-                if old_http is not None:
-                    os.environ["HTTP_PROXY"] = old_http
-                else:
-                    os.environ.pop("HTTP_PROXY", None)
-                if old_https is not None:
-                    os.environ["HTTPS_PROXY"] = old_https
-                else:
-                    os.environ.pop("HTTPS_PROXY", None)
-        except Exception as e:
-            bot.logger.warning(f"Yandex Music: Token verification failed: {e}")
+    """Check YouTube and Yandex Music accounts and configuration on startup."""
+    # Check YouTube status
+    yt_ok, yt_msg = _check_youtube_status()
+    yt_icon = "✅" if yt_ok else "ℹ️" if ("guest" in yt_msg.lower() or "not configured" in yt_msg.lower()) else "⚠️"
+    bot.logger.info(f"YouTube Status: {yt_icon} {yt_msg}")
+    print(f"YouTube Status: {yt_icon} {yt_msg}")
 
-    cookies_path = os.path.join("data", "cookies.txt")
-    if not os.path.exists(cookies_path):
-        bot.logger.info("No cookies.txt found in data directory. Yandex Music will run in guest mode.")
-        return
-
-    import http.cookiejar
-    import urllib.request
-    import json
-
-    cookie_jar = http.cookiejar.MozillaCookieJar(cookies_path)
-    try:
-        cookie_jar.load(ignore_discard=True, ignore_expires=True)
-    except Exception as e:
-        bot.logger.warning(f"Failed to parse data/cookies.txt: {e}")
-        return
-
-    yandex_cookies = [cookie for cookie in cookie_jar if "yandex" in cookie.domain]
-    if not yandex_cookies:
-        bot.logger.info("cookies.txt loaded, but contains no Yandex cookies.")
-        return
-
-    # Gather Yandex domains present in cookies
-    yandex_tlds = set()
-    for cookie in cookie_jar:
-        m = re.search(r'\byandex\.(ru|by|kz|uz|com)\b', cookie.domain)
-        if m:
-            yandex_tlds.add(m.group(1))
-
-    tlds_to_try = list(yandex_tlds) if yandex_tlds else ['ru', 'by', 'kz', 'uz', 'com']
-    bot.logger.info(f"Loaded {len(yandex_cookies)} Yandex cookies. Verifying domains: {', '.join(tlds_to_try)}")
-
-    handlers = [urllib.request.HTTPCookieProcessor(cookie_jar)]
-    active_proxy = YANDEX_PROXY or PROXY
-    if active_proxy:
-        handlers.append(urllib.request.ProxyHandler({'http': active_proxy, 'https': active_proxy}))
-    opener = urllib.request.build_opener(*handlers)
-    opener.addheaders = [
-        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
-        ("Referer", "https://music.yandex.ru/"),
-        ("X-Requested-With", "XMLHttpRequest")
-    ]
-
-    successful_tld = None
-    for tld in tlds_to_try:
-        try:
-            req = urllib.request.Request(f"https://music.yandex.{tld}/handlers/library.jsx")
-            with opener.open(req, timeout=10) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                owner = data.get("owner", {})
-                login = owner.get("login")
-                name = owner.get("name")
-                bot.logger.info(f"Yandex Music cookie check: ✅ Logged in on music.yandex.{tld} as {name or 'Unknown'} (Login: {login or 'Unknown'})")
-                
-                # Check a test track to verify plus/access on this domain
-                track_req = urllib.request.Request(f"https://music.yandex.{tld}/handlers/track.jsx?track=150402031:41648883")
-                with opener.open(track_req, timeout=10) as tr_response:
-                    tr_data = json.loads(tr_response.read().decode('utf-8'))
-                    if "track" in tr_data:
-                        bot.logger.info(f"Yandex Music cookie check: ✅ Yandex Plus subscription is ACTIVE and verified on music.yandex.{tld}!")
-                        successful_tld = tld
-                        break
-                    else:
-                        bot.logger.warning(f"Yandex Music cookie check: ⚠️ Session is logged in on music.yandex.{tld} but premium tracks are inaccessible.")
-        except urllib.error.HTTPError as e:
-            # Check if the error body contains Yandex CAPTCHA block
-            try:
-                body = e.read().decode('utf-8', errors='replace')
-                if "запросы" in body and "автоматические" in body or "captcha" in body.lower():
-                    bot.logger.warning(f"Yandex Music cookie check: ⚠️ Yandex is blocking the bot's IP address (domain .{tld}) with a CAPTCHA challenge.")
-            except Exception:
-                pass
-
-            if e.code == 404:
-                # 404 is expected for domains where the user has no session or cookies are invalid
-                continue
-            else:
-                bot.logger.warning(f"Yandex Music check on domain .{tld} returned HTTP {e.code}: {e.reason}")
-        except Exception as e:
-            bot.logger.warning(f"Yandex Music check on domain .{tld} failed: {e}")
-
-    if successful_tld:
-        _active_yandex_tld = successful_tld
-        bot.logger.info(f"Yandex Music active domain set to: music.yandex.{successful_tld} (all outgoing Yandex Music URLs will be automatically mapped to this domain).")
-    else:
-        bot.logger.warning("Yandex Music cookie check: ⚠️ Cookies in data/cookies.txt are EXPIRED, INVALID, or GEOBLOCKED on all tested domains. Yandex Music downloads may fail.")
+    # Check Yandex Music status
+    ym_ok, ym_msg = _check_yandex_status()
+    ym_icon = "✅" if ym_ok else "ℹ️" if ("guest" in ym_msg.lower() or "not configured" in ym_msg.lower()) else "⚠️"
+    bot.logger.info(f"Yandex Music Status: {ym_icon} {ym_msg}")
+    print(f"Yandex Music Status: {ym_icon} {ym_msg}")
 
 
 def setup_custom_command_parser(bot, allowed_prefixes):

@@ -1,0 +1,264 @@
+import io
+import json
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from unittest.mock import MagicMock, patch, ANY
+
+# Mock deltabot_cli and deltachat2 if not installed
+try:
+    import deltachat2
+except ImportError:
+    sys.modules['deltachat2'] = MagicMock()
+
+try:
+    import deltabot_cli
+except ImportError:
+    class MockBotCli:
+        def __init__(self, *args, **kwargs):
+            pass
+        def on(self, *args, **kwargs):
+            return lambda func: func
+        def on_init(self, func):
+            return func
+        def on_start(self, func):
+            return func
+        def start(self):
+            pass
+    mock_deltabot_cli = MagicMock()
+    mock_deltabot_cli.BotCli = MockBotCli
+    sys.modules['deltabot_cli'] = mock_deltabot_cli
+
+import database
+import bot
+
+
+class TestServiceStatusDiagnostics(unittest.TestCase):
+
+    def setUp(self):
+        self.test_db = "test_ytbot_status.db"
+        database.DB_PATH = self.test_db
+        database.init_db()
+        self.temp_dir = tempfile.mkdtemp(prefix="status_test_")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        if os.path.exists(self.test_db):
+            try:
+                os.remove(self.test_db)
+            except OSError:
+                pass
+        for sidecar in [f"{self.test_db}-wal", f"{self.test_db}-shm"]:
+            if os.path.exists(sidecar):
+                try:
+                    os.remove(sidecar)
+                except OSError:
+                    pass
+
+    def test_version_bumped(self):
+        """Test bot.VERSION is 1.6.24."""
+        self.assertEqual(bot.VERSION, "1.6.24")
+
+    def test_clean_error_youtube_reload(self):
+        """Test _clean_error formats page reload errors nicely."""
+        err = "ERROR: [youtube] u_tORtmKIjE: The page needs to be reloaded."
+        cleaned = bot._clean_error(err)
+        self.assertIn("YouTube error:", cleaned)
+        self.assertIn("The page needs to be reloaded", cleaned)
+        self.assertIn("cookies in data/cookies.txt may be expired", cleaned)
+
+    def test_clean_error_youtube_403(self):
+        """Test _clean_error formats HTTP 403 Forbidden errors nicely."""
+        err = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+        cleaned = bot._clean_error(err)
+        self.assertIn("YouTube error:", cleaned)
+        self.assertIn("HTTP Error 403: Forbidden", cleaned)
+
+    @patch("os.path.exists")
+    def test_check_youtube_status_no_cookies(self, mock_exists):
+        """Test YouTube check returns guest mode when cookies.txt does not exist."""
+        mock_exists.return_value = False
+        ok, msg = bot._check_youtube_status()
+        self.assertFalse(ok)
+        self.assertIn("Guest mode", msg)
+        self.assertIn("no cookies.txt configured", msg)
+
+    @patch("os.path.exists")
+    @patch("http.cookiejar.MozillaCookieJar")
+    def test_check_youtube_status_no_yt_cookies(self, mock_jar_cls, mock_exists):
+        """Test YouTube check when cookies.txt has no YouTube cookies."""
+        mock_exists.return_value = True
+        mock_jar = MagicMock()
+        cookie1 = MagicMock()
+        cookie1.domain = "other-site.com"
+        mock_jar.__iter__.return_value = [cookie1]
+        mock_jar_cls.return_value = mock_jar
+
+        ok, msg = bot._check_youtube_status()
+        self.assertFalse(ok)
+        self.assertIn("Guest mode", msg)
+        self.assertIn("contains no YouTube cookies", msg)
+
+    @patch("os.path.exists")
+    @patch("http.cookiejar.MozillaCookieJar")
+    def test_check_youtube_status_no_login_tokens(self, mock_jar_cls, mock_exists):
+        """Test YouTube check when cookies.txt has YouTube visitor cookies but no login session."""
+        mock_exists.return_value = True
+        mock_jar = MagicMock()
+        cookie1 = MagicMock()
+        cookie1.domain = ".youtube.com"
+        cookie1.name = "VISITOR_INFO1_LIVE"
+        mock_jar.__iter__.return_value = [cookie1]
+        mock_jar_cls.return_value = mock_jar
+
+        ok, msg = bot._check_youtube_status()
+        self.assertFalse(ok)
+        self.assertIn("Guest mode", msg)
+        self.assertIn("no active login session", msg)
+
+    @patch("urllib.request.build_opener")
+    @patch("os.path.exists")
+    @patch("http.cookiejar.MozillaCookieJar")
+    def test_check_youtube_status_logged_in_with_name(self, mock_jar_cls, mock_exists, mock_build_opener):
+        """Test YouTube check when session is active and user channel name is found in page."""
+        mock_exists.return_value = True
+        mock_jar = MagicMock()
+        cookie1 = MagicMock()
+        cookie1.domain = ".youtube.com"
+        cookie1.name = "LOGIN_INFO"
+        mock_jar.__iter__.return_value = [cookie1]
+        mock_jar_cls.return_value = mock_jar
+
+        html_content = '''
+        <html>
+        <script>var ytcfg = {"LOGGED_IN": true};</script>
+        <script>var ytInitialData = {"accountName": {"simpleText": "My Cool Channel"}};</script>
+        </html>
+        '''
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = html_content.encode("utf-8")
+        mock_resp.geturl.return_value = "https://www.youtube.com/"
+        
+        mock_opener = MagicMock()
+        mock_opener.open.return_value.__enter__.return_value = mock_resp
+        mock_build_opener.return_value = mock_opener
+
+        ok, msg = bot._check_youtube_status()
+        self.assertTrue(ok)
+        self.assertEqual(msg, "Logged in as My Cool Channel")
+
+    @patch("urllib.request.build_opener")
+    @patch("os.path.exists")
+    @patch("http.cookiejar.MozillaCookieJar")
+    def test_check_youtube_status_expired_page_reload(self, mock_jar_cls, mock_exists, mock_build_opener):
+        """Test YouTube check detects 'The page needs to be reloaded' bot challenge."""
+        mock_exists.return_value = True
+        mock_jar = MagicMock()
+        cookie1 = MagicMock()
+        cookie1.domain = ".youtube.com"
+        cookie1.name = "LOGIN_INFO"
+        mock_jar.__iter__.return_value = [cookie1]
+        mock_jar_cls.return_value = mock_jar
+
+        html_content = '<html><body><div>The page needs to be reloaded.</div></body></html>'
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = html_content.encode("utf-8")
+        mock_resp.geturl.return_value = "https://www.youtube.com/"
+        
+        mock_opener = MagicMock()
+        mock_opener.open.return_value.__enter__.return_value = mock_resp
+        mock_build_opener.return_value = mock_opener
+
+        ok, msg = bot._check_youtube_status()
+        self.assertFalse(ok)
+        self.assertIn("The page needs to be reloaded", msg)
+
+    @patch.dict(os.environ, {"YANDEX_TOKEN": "valid_token_123"}, clear=True)
+    def test_check_yandex_status_token_plus_active(self):
+        """Test Yandex check with active Plus token."""
+        mock_client = MagicMock()
+        mock_status = MagicMock()
+        mock_status.plus.has_plus = True
+        mock_client.account_status.return_value = mock_status
+        mock_client.me.account.display_name = "YandexUser"
+
+        mock_ym = MagicMock()
+        mock_ym.Client.return_value.init.return_value = mock_client
+        with patch.dict(sys.modules, {"yandex_music": mock_ym}):
+            ok, msg = bot._check_yandex_status()
+            self.assertTrue(ok)
+            self.assertIn("Plus ACTIVE via YANDEX_TOKEN", msg)
+            self.assertIn("YandexUser", msg)
+
+    @patch.dict(os.environ, {"YANDEX_TOKEN": "inactive_token_123"}, clear=True)
+    def test_check_yandex_status_token_plus_inactive(self):
+        """Test Yandex check with token lacking Plus subscription."""
+        mock_client = MagicMock()
+        mock_status = MagicMock()
+        mock_status.plus.has_plus = False
+        mock_client.account_status.return_value = mock_status
+        mock_client.me.account.display_name = "FreeUser"
+
+        mock_ym = MagicMock()
+        mock_ym.Client.return_value.init.return_value = mock_client
+        with patch.dict(sys.modules, {"yandex_music": mock_ym}):
+            ok, msg = bot._check_yandex_status()
+            self.assertFalse(ok)
+            self.assertIn("Plus INACTIVE via YANDEX_TOKEN", msg)
+            self.assertIn("FreeUser", msg)
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("os.path.exists")
+    def test_check_yandex_status_not_configured(self, mock_exists):
+        """Test Yandex check when no token or cookies are configured."""
+        mock_exists.return_value = False
+        ok, msg = bot._check_yandex_status()
+        self.assertFalse(ok)
+        self.assertIn("Not configured (guest mode)", msg)
+
+    @patch("bot._check_navidrome_status", return_value=(True, "Navidrome v0.61.2 (folder OK: `/music`)"))
+    @patch("bot._check_yandex_status", return_value=(True, "Plus ACTIVE via YANDEX_TOKEN (Account: Alice)"))
+    @patch("bot._check_youtube_status", return_value=(True, "Logged in as BobChannel"))
+    @patch("bot._is_dc_admin", return_value=True)
+    @patch("bot._send")
+    def test_stats_command_includes_youtube_yandex_navidrome_for_admin(self, mock_send, mock_is_admin, mock_yt, mock_ym, mock_nav):
+        """Test that /stats output includes YouTube, Yandex Music, and Navidrome statuses for admin."""
+        mock_bot = MagicMock()
+        mock_event = MagicMock()
+        mock_event.msg.from_id = 303
+        mock_event.msg.chat_id = 202
+
+        bot.stats_command(mock_bot, 1, mock_event)
+        mock_send.assert_called_once()
+        sent_reply = mock_send.call_args[0][3]
+
+        self.assertIn("YouTube:", sent_reply)
+        self.assertIn("🟢 Logged in as BobChannel", sent_reply)
+        self.assertIn("Yandex Music:", sent_reply)
+        self.assertIn("🟢 Plus ACTIVE via YANDEX_TOKEN (Account: Alice)", sent_reply)
+        self.assertIn("Navidrome:", sent_reply)
+        self.assertIn("🟢 Navidrome v0.61.2", sent_reply)
+
+    @patch("bot._is_dc_admin", return_value=False)
+    @patch("bot._send")
+    def test_stats_command_omits_diagnostics_for_non_admin(self, mock_send, mock_is_admin):
+        """Test that /stats output omits service diagnostics for non-admin users."""
+        mock_bot = MagicMock()
+        mock_event = MagicMock()
+        mock_event.msg.from_id = 999
+        mock_event.msg.chat_id = 202
+
+        bot.stats_command(mock_bot, 1, mock_event)
+        mock_send.assert_called_once()
+        sent_reply = mock_send.call_args[0][3]
+
+        self.assertNotIn("YouTube:", sent_reply)
+        self.assertNotIn("Yandex Music:", sent_reply)
+        self.assertNotIn("Navidrome:", sent_reply)
+        self.assertNotIn("Disk Space", sent_reply)
+
+
+if __name__ == "__main__":
+    unittest.main()

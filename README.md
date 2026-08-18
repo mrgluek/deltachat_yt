@@ -40,7 +40,7 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 - `/ytm_<video_id>` - Download audio by ID.
 - `/ytms <url>` - Save audio to Navidrome library via Subsonic API (Admin only).
 - `/ytms_<video_id>` - Save audio to Navidrome by ID (Admin only).
-- `/stats` - View bot usage statistics.
+- `/stats` - View bot usage statistics, disk space, and service status diagnostics for YouTube, Yandex Music, and Navidrome (Admin only).
 - `/help` - Show help message.
 - `/initadmin` - Claim bot ownership (first time setup).
 - `/donate` - Support the project.

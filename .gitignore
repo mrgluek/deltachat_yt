@@ -27,3 +27,8 @@ docker-compose.override.yml
 
 # Local overrides (healthchecks, etc.)
 .env.local
+
+# Test media and scratch files
+*.opus
+empty_cookies.txt
+test_cookies.txt
