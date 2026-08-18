@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.25"
+VERSION = "1.6.26"
 
 dc_cli = BotCli("ytbot")
 
@@ -776,6 +776,7 @@ async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_prox
         
     cookies_path = os.path.join("data", "cookies.txt")
     if use_cookies and os.path.exists(cookies_path):
+        _sanitize_cookies_file(cookies_path)
         cmd.extend(["--cookies", cookies_path])
         
     cmd.append(url)
@@ -866,6 +867,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         
     cookies_path = os.path.join("data", "cookies.txt")
     if use_cookies and os.path.exists(cookies_path):
+        _sanitize_cookies_file(cookies_path)
         cmd.extend(["--cookies", cookies_path])
         
     cmd.append(url)
@@ -1413,6 +1415,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         
     cookies_path = os.path.join("data", "cookies.txt")
     if use_cookies and os.path.exists(cookies_path):
+        _sanitize_cookies_file(cookies_path)
         cmd.extend(["--cookies", cookies_path])
         
     cmd.append(_make_yt_url(video_id))
@@ -1592,24 +1595,28 @@ def _trigger_subsonic_scan(server_url: str, user: str, password: str = None, tok
         return False, f"Connection failed: {e}"
 
 
-def _load_cookiejar(cookies_path: str):
-    """Safely load Netscape cookies into MozillaCookieJar, ensuring magic header and normalizing domain flags."""
-    import http.cookiejar
-    jar = http.cookiejar.MozillaCookieJar()
+def _sanitize_cookies_file(cookies_path: str = os.path.join("data", "cookies.txt")) -> bool:
+    """
+    Sanitize and normalize cookies.txt on disk in-place.
+    Ensures '# Netscape HTTP Cookie File' magic header is present on line 1,
+    fixes domain_specified flags to prevent standard library AssertionError (e.g. vk.com\tTRUE -> vk.com\tFALSE),
+    and converts irregular whitespace to tabs.
+    """
     if not cookies_path or not os.path.exists(cookies_path):
-        return jar
+        return False
 
     try:
         with open(cookies_path, 'r', encoding='utf-8', errors='replace') as f:
             raw_lines = f.readlines()
 
         cleaned_lines = ["# Netscape HTTP Cookie File\n"]
+
         for line in raw_lines:
             stripped = line.strip()
             if not stripped:
                 continue
-            
-            # Skip existing magic headers since we already put one at the top
+
+            # Skip existing magic headers since we already put one at line 1
             if stripped.startswith("# Netscape HTTP Cookie File") or stripped.startswith("# HTTP Cookie File"):
                 continue
 
@@ -1619,30 +1626,45 @@ def _load_cookiejar(cookies_path: str):
                 prefix = "#HttpOnly_"
                 cookie_line = cookie_line[len("#HttpOnly_"):]
             elif cookie_line.startswith("#"):
+                cleaned_lines.append(line if line.endswith("\n") else line + "\n")
                 continue
 
             parts = cookie_line.rstrip("\r\n").split("\t")
             if len(parts) < 7:
-                # Fallback in case columns were separated by multiple spaces
+                # Fallback if separated by multiple spaces
                 parts = re.split(r'\t+|\s{2,}', cookie_line.rstrip("\r\n"))
 
             if len(parts) >= 7:
                 domain = parts[0]
                 initial_dot = domain.startswith(".")
-                parts[1] = "TRUE" if initial_dot else "FALSE"
+                expected_flag = "TRUE" if initial_dot else "FALSE"
+                parts[1] = expected_flag
                 cleaned_lines.append(prefix + "\t".join(parts) + "\n")
 
-        with tempfile.NamedTemporaryFile("w+", encoding="utf-8", delete=False) as tmp:
-            tmp.writelines(cleaned_lines)
-            tmp_path = tmp.name
-
-        try:
-            jar.load(tmp_path, ignore_discard=True, ignore_expires=True)
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        # Write back to disk atomically
+        temp_file = cookies_path + ".tmp"
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            f.writelines(cleaned_lines)
+        os.replace(temp_file, cookies_path)
+        return True
     except Exception as e:
-        logger.warning(f"Failed to parse cookies from {cookies_path}: {e}")
+        logger.warning(f"Failed to sanitize {cookies_path}: {e}")
+        return False
+
+
+def _load_cookiejar(cookies_path: str):
+    """Safely load Netscape cookies into MozillaCookieJar, ensuring file is sanitized first."""
+    import http.cookiejar
+    jar = http.cookiejar.MozillaCookieJar()
+    if not cookies_path or not os.path.exists(cookies_path):
+        return jar
+
+    _sanitize_cookies_file(cookies_path)
+
+    try:
+        jar.load(cookies_path, ignore_discard=True, ignore_expires=True)
+    except Exception as e:
+        logger.warning(f"Failed to load sanitized cookies from {cookies_path}: {e}")
 
     return jar
 

@@ -58,8 +58,25 @@ class TestServiceStatusDiagnostics(unittest.TestCase):
                     pass
 
     def test_version_bumped(self):
-        """Test bot.VERSION is 1.6.25."""
-        self.assertEqual(bot.VERSION, "1.6.25")
+        """Test bot.VERSION is 1.6.26."""
+        self.assertEqual(bot.VERSION, "1.6.26")
+
+    def test_sanitize_cookies_file_in_place(self):
+        """Test _sanitize_cookies_file rewrites invalid cookie file on disk to valid Netscape format."""
+        raw_cookie = "vk.com\tTRUE\t/\tTRUE\t1810460599\tremixlang\t3\n.youtube.com\tFALSE\t/\tTRUE\t1893456000\tLOGIN_INFO\ttoken123\n"
+        cookie_file = os.path.join(self.temp_dir, "raw_cookies.txt")
+        with open(cookie_file, "w", encoding="utf-8") as f:
+            f.write(raw_cookie)
+
+        result = bot._sanitize_cookies_file(cookie_file)
+        self.assertTrue(result)
+
+        with open(cookie_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        self.assertEqual(lines[0], "# Netscape HTTP Cookie File\n")
+        self.assertIn("vk.com\tFALSE\t/\tTRUE\t1810460599\tremixlang\t3\n", lines)
+        self.assertIn(".youtube.com\tTRUE\t/\tTRUE\t1893456000\tLOGIN_INFO\ttoken123\n", lines)
 
     def test_load_cookiejar_mismatched_domain_specified(self):
         """Test _load_cookiejar normalizes mismatched domain_specified flags without throwing AssertionError."""

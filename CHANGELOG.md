@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.26] - 2026-08-18
+
+### Fixed
+- **Automatic In-Place `cookies.txt` Sanitization (`_sanitize_cookies_file`):**
+  - Added in-place sanitization for `data/cookies.txt` before invoking `yt-dlp` or loading cookies, ensuring that missing `# Netscape HTTP Cookie File` headers, malformed domain flags, and multi-space whitespace variations are automatically normalized on disk so `yt-dlp` never crashes with `CookieLoadError` / `invalid Netscape format`.
+
 ## [1.6.25] - 2026-08-18
 
 ### Fixed
