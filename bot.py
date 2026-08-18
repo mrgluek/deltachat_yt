@@ -1593,7 +1593,7 @@ def _trigger_subsonic_scan(server_url: str, user: str, password: str = None, tok
 
 
 def _load_cookiejar(cookies_path: str):
-    """Safely load Netscape cookies into MozillaCookieJar, normalizing domain_specified flags to prevent standard library AssertionError."""
+    """Safely load Netscape cookies into MozillaCookieJar, ensuring magic header and normalizing domain flags."""
     import http.cookiejar
     jar = http.cookiejar.MozillaCookieJar()
     if not cookies_path or not os.path.exists(cookies_path):
@@ -1603,16 +1603,14 @@ def _load_cookiejar(cookies_path: str):
         with open(cookies_path, 'r', encoding='utf-8', errors='replace') as f:
             raw_lines = f.readlines()
 
-        cleaned_lines = []
+        cleaned_lines = ["# Netscape HTTP Cookie File\n"]
         for line in raw_lines:
             stripped = line.strip()
             if not stripped:
-                cleaned_lines.append(line)
                 continue
             
-            # Preserve header comments
-            if line.startswith("# Netscape") or line.startswith("# HTTP") or line.startswith("# This file"):
-                cleaned_lines.append(line)
+            # Skip existing magic headers since we already put one at the top
+            if stripped.startswith("# Netscape HTTP Cookie File") or stripped.startswith("# HTTP Cookie File"):
                 continue
 
             prefix = ""
@@ -1621,17 +1619,18 @@ def _load_cookiejar(cookies_path: str):
                 prefix = "#HttpOnly_"
                 cookie_line = cookie_line[len("#HttpOnly_"):]
             elif cookie_line.startswith("#"):
-                cleaned_lines.append(line)
                 continue
 
             parts = cookie_line.rstrip("\r\n").split("\t")
+            if len(parts) < 7:
+                # Fallback in case columns were separated by multiple spaces
+                parts = re.split(r'\t+|\s{2,}', cookie_line.rstrip("\r\n"))
+
             if len(parts) >= 7:
                 domain = parts[0]
                 initial_dot = domain.startswith(".")
                 parts[1] = "TRUE" if initial_dot else "FALSE"
                 cleaned_lines.append(prefix + "\t".join(parts) + "\n")
-            else:
-                cleaned_lines.append(line)
 
         with tempfile.NamedTemporaryFile("w+", encoding="utf-8", delete=False) as tmp:
             tmp.writelines(cleaned_lines)

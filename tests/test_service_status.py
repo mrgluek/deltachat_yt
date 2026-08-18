@@ -80,6 +80,17 @@ class TestServiceStatusDiagnostics(unittest.TestCase):
         self.assertIn("SAPISID", cookie_names)
         self.assertIn("SID", cookie_names)
 
+    def test_load_cookiejar_no_header_vk_cookie(self):
+        """Test _load_cookiejar parses file starting with raw cookie like vk.com without Netscape header."""
+        cookie_content = "vk.com\tTRUE\t/\tTRUE\t1810460599\tremixlang\t3\n"
+        cookie_file = os.path.join(self.temp_dir, "cookies_no_header.txt")
+        with open(cookie_file, "w", encoding="utf-8") as f:
+            f.write(cookie_content)
+
+        jar = bot._load_cookiejar(cookie_file)
+        cookie_names = [c.name for c in jar]
+        self.assertIn("remixlang", cookie_names)
+
     def test_clean_error_youtube_reload(self):
         """Test _clean_error formats page reload errors nicely."""
         err = "ERROR: [youtube] u_tORtmKIjE: The page needs to be reloaded."
