@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.26"
+VERSION = "1.6.27"
 
 dc_cli = BotCli("ytbot")
 
@@ -848,6 +848,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         cmd.extend(["--max-filesize", f"{MAX_FILESIZE_MB}M"])
     cmd.extend([
         "--merge-output-format", "mp4",
+        "--compat-options", "no-abort-on-error",
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
         "--js-runtimes", "deno:/root/.deno/bin/deno",
@@ -1393,8 +1394,9 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         "--embed-thumbnail",
         "--write-subs",
         "--write-auto-subs",
-        "--sub-langs", "all,-live_chat",
+        "--sub-langs", "en.*,ru.*,orig,-live_chat",
         "--convert-subs", "lrc",
+        "--compat-options", "no-abort-on-error",
         "--parse-metadata", "%(webpage_url)s:%(meta_comment)s",
         "--parse-metadata", "%(webpage_url)s:%(meta_description)s",
         "--no-warnings",

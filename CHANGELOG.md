@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.27] - 2026-08-18
+
+### Fixed
+- **Subtitles Rate Limiting & Non-Fatal Download Toleration:**
+  - Narrowed subtitle language filter from `all,-live_chat` to `en.*,ru.*,orig,-live_chat` in audio downloads to prevent YouTube HTTP 429 Too Many Requests rate-limiting across 100+ languages.
+  - Added `--compat-options no-abort-on-error` to both audio and video downloads to ensure that subtitle fetching or other non-fatal warnings do not abort the media download.
+
 ## [1.6.26] - 2026-08-18
 
 ### Fixed
