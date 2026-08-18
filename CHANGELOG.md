@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.29] - 2026-08-18
+
+### Fixed
+- **Multi-Client YouTube Player Extraction (`player_client=android,ios,web`):**
+  - Added `--extractor-args "youtube:player_client=android,ios,web"` across info extraction, video, and audio downloads to bypass strict SABR Web PO-Token / HTTP 403 Forbidden blocks on music and VEVO tracks during guest/proxy downloads.
+
 ## [1.6.28] - 2026-08-18
 
 ### Fixed

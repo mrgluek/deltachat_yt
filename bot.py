@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.28"
+VERSION = "1.6.29"
 
 dc_cli = BotCli("ytbot")
 
@@ -762,6 +762,7 @@ async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_prox
     cmd = [
         "yt-dlp", "--no-playlist", "--dump-json", "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
+        "--extractor-args", "youtube:player_client=android,ios,web",
         "--js-runtimes", "deno:/root/.deno/bin/deno",
         "--no-cache-dir",
         "--no-config",
@@ -850,6 +851,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "--merge-output-format", "mp4",
         "--no-abort-on-error",
         "--ignore-errors",
+        "--extractor-args", "youtube:player_client=android,ios,web",
         "--no-warnings",
         "--no-check-certificate", "--geo-bypass",
         "--js-runtimes", "deno:/root/.deno/bin/deno",
@@ -1399,6 +1401,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         "--convert-subs", "lrc",
         "--no-abort-on-error",
         "--ignore-errors",
+        "--extractor-args", "youtube:player_client=android,ios,web",
         "--parse-metadata", "%(webpage_url)s:%(meta_comment)s",
         "--parse-metadata", "%(webpage_url)s:%(meta_description)s",
         "--no-warnings",
