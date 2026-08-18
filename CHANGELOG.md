@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.25] - 2026-08-18
+
+### Fixed
+- **Robust Netscape Cookie Parsing (`_load_cookiejar`):**
+  - Added custom `_load_cookiejar` helper that normalizes `domain_specified` flags and handles `#HttpOnly_` prefixes to prevent Python `http.cookiejar.MozillaCookieJar` standard library `AssertionError` (`assert domain_specified == initial_dot`) on modern browser cookie exports.
+
 ## [1.6.24] - 2026-08-18
 
 ### Added

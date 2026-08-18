@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.24"
+VERSION = "1.6.25"
 
 dc_cli = BotCli("ytbot")
 
@@ -1592,18 +1592,69 @@ def _trigger_subsonic_scan(server_url: str, user: str, password: str = None, tok
         return False, f"Connection failed: {e}"
 
 
+def _load_cookiejar(cookies_path: str):
+    """Safely load Netscape cookies into MozillaCookieJar, normalizing domain_specified flags to prevent standard library AssertionError."""
+    import http.cookiejar
+    jar = http.cookiejar.MozillaCookieJar()
+    if not cookies_path or not os.path.exists(cookies_path):
+        return jar
+
+    try:
+        with open(cookies_path, 'r', encoding='utf-8', errors='replace') as f:
+            raw_lines = f.readlines()
+
+        cleaned_lines = []
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped:
+                cleaned_lines.append(line)
+                continue
+            
+            # Preserve header comments
+            if line.startswith("# Netscape") or line.startswith("# HTTP") or line.startswith("# This file"):
+                cleaned_lines.append(line)
+                continue
+
+            prefix = ""
+            cookie_line = line
+            if cookie_line.startswith("#HttpOnly_"):
+                prefix = "#HttpOnly_"
+                cookie_line = cookie_line[len("#HttpOnly_"):]
+            elif cookie_line.startswith("#"):
+                cleaned_lines.append(line)
+                continue
+
+            parts = cookie_line.rstrip("\r\n").split("\t")
+            if len(parts) >= 7:
+                domain = parts[0]
+                initial_dot = domain.startswith(".")
+                parts[1] = "TRUE" if initial_dot else "FALSE"
+                cleaned_lines.append(prefix + "\t".join(parts) + "\n")
+            else:
+                cleaned_lines.append(line)
+
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8", delete=False) as tmp:
+            tmp.writelines(cleaned_lines)
+            tmp_path = tmp.name
+
+        try:
+            jar.load(tmp_path, ignore_discard=True, ignore_expires=True)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+    except Exception as e:
+        logger.warning(f"Failed to parse cookies from {cookies_path}: {e}")
+
+    return jar
+
+
 def _check_youtube_status() -> tuple[bool, str]:
     """Check YouTube cookie configuration, authentication, and session status."""
     cookies_path = os.path.join("data", "cookies.txt")
     if not os.path.exists(cookies_path):
         return False, "Guest mode (no cookies.txt configured)"
 
-    import http.cookiejar
-    cookie_jar = http.cookiejar.MozillaCookieJar(cookies_path)
-    try:
-        cookie_jar.load(ignore_discard=True, ignore_expires=True)
-    except Exception as e:
-        return False, f"Failed to parse data/cookies.txt: {e}"
+    cookie_jar = _load_cookiejar(cookies_path)
 
     # Check for YouTube / Google cookies
     yt_cookies = [c for c in cookie_jar if "youtube.com" in c.domain or "google.com" in c.domain]
@@ -1721,12 +1772,7 @@ def _check_yandex_status() -> tuple[bool, str]:
     if not os.path.exists(cookies_path):
         return False, "Not configured (guest mode)"
 
-    import http.cookiejar
-    cookie_jar = http.cookiejar.MozillaCookieJar(cookies_path)
-    try:
-        cookie_jar.load(ignore_discard=True, ignore_expires=True)
-    except Exception as e:
-        return False, f"Failed to parse data/cookies.txt: {e}"
+    cookie_jar = _load_cookiejar(cookies_path)
 
     yandex_cookies = [cookie for cookie in cookie_jar if "yandex" in cookie.domain]
     if not yandex_cookies:
