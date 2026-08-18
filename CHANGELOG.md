@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.28] - 2026-08-18
+
+### Fixed
+- **CLI Options for `yt-dlp` Error Toleration:**
+  - Replaced incorrect `--compat-options no-abort-on-error` with standalone flags `--no-abort-on-error` and `--ignore-errors` in `_download_video` and `_download_audio`.
+
 ## [1.6.27] - 2026-08-18
 
 ### Fixed
