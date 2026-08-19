@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.30"
+VERSION = "1.6.31"
 
 dc_cli = BotCli("ytbot")
 
@@ -848,7 +848,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "yt-dlp",
         "--no-playlist",
         "--match-filter", f"duration<={max_duration}",
-        "-f", f"bv[height<={max_height}]+ba/b[height<={max_height}]/b",
+        "-f", f"bv[height<={max_height}]+ba/b[height<={max_height}]/bv*+ba/b/best",
     ]
     if not start_time and not end_time:
         cmd.extend(["--max-filesize", f"{MAX_FILESIZE_MB}M"])
@@ -891,13 +891,13 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
 
         if proc.returncode != 0:
             err = stderr.decode(errors='replace').strip()
-            if not player_client and ("403" in err or "Forbidden" in err):
-                logger.info(f"Received 403 Forbidden downloading video for {video_id}. Retrying with mobile player_client...")
+            if not player_client and ("403" in err or "Forbidden" in err or "requested format is not available" in err.lower()):
+                logger.info(f"Received 403/format issue downloading video for {video_id}. Retrying with mobile player_client...")
                 return await _download_video(video_id, output_dir, max_height, start_time, end_time, use_cookies=use_cookies, custom_proxy=custom_proxy, player_client="android,ios,web")
 
             if "duration" in err.lower() or "filter" in err.lower():
                 return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
-            if "max-filesize" in err.lower() or "filesize" in err.lower() or "requested format" in err.lower() or "not available" in err.lower():
+            if "max-filesize" in err.lower() or "filesize" in err.lower():
                 return None, None, f"📦 Video exceeds {MAX_FILESIZE_MB} MB size limit"
             
             cleaned_err = _clean_error(err)
@@ -1377,9 +1377,9 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         effective_duration = duration
 
     if effective_duration <= 600:
-        # Keep original format, preferring opus (for YouTube), then m4a (AAC) to avoid transcoding
+        # Keep original format, preferring opus (for YouTube), then m4a (AAC), then best audio/muxed stream to avoid transcoding
         fmt = "best"
-        format_selector = "ba[acodec=opus]/ba[ext=m4a]/ba"
+        format_selector = "ba[acodec=opus]/ba[ext=m4a]/ba/b/best"
         pp_args = []
     else:
         # For long audio (> 10 min), transcode and compress to Opus 64k mono to stay under 30MB limit
@@ -1452,8 +1452,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
 
         if proc.returncode != 0:
             err = stderr.decode(errors='replace').strip()
-            if not player_client and ("403" in err or "Forbidden" in err):
-                logger.info(f"Received 403 Forbidden downloading audio for {video_id}. Retrying with mobile player_client...")
+            if not player_client and ("403" in err or "Forbidden" in err or "requested format is not available" in err.lower()):
+                logger.info(f"Received 403/format issue downloading audio for {video_id}. Retrying with mobile player_client...")
                 return await _download_audio(video_id, output_dir, duration, start_time=start_time, end_time=end_time, use_cookies=use_cookies, custom_proxy=custom_proxy, player_client="android,ios,web")
 
             if "duration" in err.lower() or "filter" in err.lower():

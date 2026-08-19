@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.31] - 2026-08-19
+
+### Fixed
+- **Broadened Format Selection & Mobile Muxed Audio Fallback:**
+  - Updated audio format selector to `ba[acodec=opus]/ba[ext=m4a]/ba/b/best` and video selector to `bv*+ba/b/best` so `yt-dlp` seamlessly extracts audio from muxed video streams (`b` / `best`) when standalone audio (`ba`) is not offered by mobile YouTube clients.
+  - Added automatic mobile player client retry upon encountering `Requested format is not available` or `HTTP 403 Forbidden`.
+
 ## [1.6.30] - 2026-08-18
 
 ### Fixed
