@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.37] - 2026-08-20
+
+### Fixed
+- **Album Organization and Lyrics Slicing for Chapters:**
+  - Fixed Album tag resolution for sliced chapters to consistently use the video/mix album title instead of falling back to the chapter track title.
+  - Added timestamp-adjusted synchronized `.lrc` lyrics slicing (`_slice_lrc`) for chapters, ensuring every track slice in Navidrome gets its corresponding `.lrc` companion file and embedded lyrics.
+
 ## [1.6.36] - 2026-08-20
 
 ### Improved

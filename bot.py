@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.36"
+VERSION = "1.6.37"
 
 dc_cli = BotCli("ytbot")
 
@@ -1224,6 +1224,32 @@ def _convert_subtitles_to_lrc(sub_content: str) -> str:
     return '\n'.join(lrc_lines)
 
 
+def _slice_lrc(lrc_content: str, start_sec: float, end_sec: float | None = None) -> str:
+    """Slice synchronized LRC lines between start_sec and end_sec, re-zeroing timestamps to track start."""
+    if not lrc_content:
+        return ""
+    timestamp_pattern = re.compile(r"\[(\d{1,3}):(\d{2})(?:[\.:](\d{1,3}))?\]")
+    out_lines = []
+    for line in lrc_content.splitlines():
+        m = timestamp_pattern.search(line)
+        if not m:
+            continue
+        mins = int(m.group(1))
+        secs = int(m.group(2))
+        ms = int(m.group(3) or 0)
+        total_s = mins * 60 + secs + (ms / 1000 if len(m.group(3) or "") == 3 else ms / 100)
+        
+        if total_s >= start_sec and (end_sec is None or total_s <= end_sec):
+            new_s = total_s - start_sec
+            new_mins = int(new_s // 60)
+            new_secs = int(new_s % 60)
+            new_ms = int((new_s - int(new_s)) * 100)
+            text = timestamp_pattern.sub("", line).strip()
+            if text:
+                out_lines.append(f"[{new_mins:02d}:{new_secs:02d}.{new_ms:02d}] {text}")
+    return "\n".join(out_lines)
+
+
 def _embed_lyrics_in_audio(audio_path: str, lyrics_text: str):
     """Embed lyrics into audio metadata tags (Vorbis comment for Opus/FLAC, USLT for MP3, ©lyr for MP4/M4A)."""
     if not lyrics_text or not audio_path or not os.path.exists(audio_path):
@@ -1605,12 +1631,38 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 chapters = _get_video_chapters(tag_info)
                 ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
                 if chapter:
+                    orig_title = tag_info.get("title") or "Singles"
+                    album_name = tag_info.get("album") or orig_title
+                    tag_info["orig_title"] = orig_title
                     tag_info["title"] = chapter["title"]
                     tag_info["track"] = chapter["title"]
-                    tag_info["album"] = tag_info.get("album") or tag_info.get("title") or "Singles"
+                    tag_info["album"] = album_name
                     tag_info["artist"] = tag_info.get("artist") or tag_info.get("uploader") or tag_info.get("channel") or tag_info.get("creator") or "Unknown Artist"
                     tag_info["track_number"] = ch_idx + 1
                     tag_info["total_tracks"] = len(chapters)
+
+                # Process companion LRC for this slice if base LRC exists
+                base_lrc_candidates = [
+                    os.path.join(CACHE_DIR, f"{clean_base}.lrc"),
+                    os.path.join(output_dir, f"{clean_base}.lrc"),
+                    os.path.splitext(cached_base)[0] + ".lrc"
+                ]
+                for c_lrc in base_lrc_candidates:
+                    if os.path.exists(c_lrc):
+                        try:
+                            with open(c_lrc, "r", encoding="utf-8", errors="ignore") as f:
+                                base_lrc_content = f.read()
+                            sliced_lrc = _slice_lrc(base_lrc_content, start_time or 0, end_time)
+                            if sliced_lrc:
+                                slice_lrc_path = os.path.join(output_dir, f"{safe_id}.lrc")
+                                with open(slice_lrc_path, "w", encoding="utf-8") as f:
+                                    f.write(sliced_lrc)
+                                _embed_lyrics_in_audio(sliced_path, _extract_clean_lyrics(sliced_lrc))
+                                tag_info["lyrics"] = sliced_lrc
+                                break
+                        except Exception as e:
+                            logger.warning(f"Error slicing LRC for {video_id}: {e}")
+
                 _tag_audio_file(sliced_path, tag_info, webpage_url=_make_yt_url(clean_base))
                 return sliced_path, tag_info, None
 
@@ -2203,8 +2255,12 @@ def _save_to_navidrome(filepath: str, info: dict, music_dir: str, video_id: str 
         ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
 
         if chapter:
-            title = chapter.get("title") or info.get("track") or info.get("title") or "Unknown Track"
-            album = info.get("album") or info.get("title") or "Singles"
+            orig_title = info.get("orig_title") or info.get("video_title") or (info.get("title") if info.get("title") != chapter.get("title") else "Singles")
+            if info.get("album") and info["album"] != chapter.get("title"):
+                album = info["album"]
+            else:
+                album = orig_title
+            title = chapter.get("title") or info.get("track") or orig_title
             artist = info.get("artist") or info.get("uploader") or info.get("channel") or info.get("creator") or "Unknown Artist"
         else:
             artist = (
