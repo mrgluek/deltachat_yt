@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.38] - 2026-08-21
+
+### Fixed
+- **Defined `out_template` and `safe_id` in `_download_video`:**
+  - Fixed `NameError: name 'out_template' is not defined` during video downloads (e.g. Rutube or YouTube video links).
+
 ## [1.6.37] - 2026-08-20
 
 ### Fixed

@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.37"
+VERSION = "1.6.38"
 
 dc_cli = BotCli("ytbot")
 
@@ -962,6 +962,9 @@ async def _fetch_video_info_with_fallback(video_id: str) -> tuple[dict | None, s
 
 async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None, player_client: str = None) -> tuple[str | None, dict | None, str | None]:
     """Download video. Returns (filepath, info_dict, error_string)."""
+    safe_id = _get_cache_id(video_id)
+    out_template = os.path.join(output_dir, f"{safe_id}.%(ext)s")
+    
     cmd = [
         "yt-dlp",
         "--no-playlist",

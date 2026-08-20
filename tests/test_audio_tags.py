@@ -55,7 +55,7 @@ class TestYTBotAudioTags(unittest.IsolatedAsyncioTestCase):
     def test_version_constant(self):
         """Test that bot.VERSION constant is set."""
         self.assertTrue(hasattr(bot, "VERSION"))
-        self.assertEqual(bot.VERSION, "1.6.37")
+        self.assertEqual(bot.VERSION, "1.6.38")
 
     def test_database_config_roundtrip(self):
         """Test set_config and get_config in database."""
