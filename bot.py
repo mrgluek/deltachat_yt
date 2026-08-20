@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.34"
+VERSION = "1.6.35"
 
 dc_cli = BotCli("ytbot")
 
@@ -1552,23 +1552,72 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
             logger.error(f"Yandex Music native download failed: {e}")
             return None, None, f"Yandex Music error: {e}"
 
-    if start_time:
-        if end_time:
-            effective_duration = max(0, end_time - start_time)
-        else:
-            effective_duration = max(0, duration - start_time)
-    elif end_time:
-        effective_duration = max(0, end_time)
-    else:
-        effective_duration = duration
+    safe_id = _get_cache_id(video_id)
 
-    if effective_duration <= 600:
-        # Keep original format, preferring opus (for YouTube), then m4a (AAC), then best audio/muxed stream to avoid transcoding
+    # If a section is requested (start_time or end_time specified), slice locally from base audio in cache
+    if start_time is not None or end_time is not None:
+        clean_base = _get_base_video_id(video_id)
+        cached_base = _find_cached_file(clean_base, "audio")
+        base_info = None
+        if not cached_base:
+            logger.info(f"Base audio not found in cache for {clean_base}. Downloading full audio for slicing...")
+            base_path, base_info, base_err = await _download_audio(
+                clean_base, CACHE_DIR, max(duration, 7200),
+                start_time=None, end_time=None,
+                use_cookies=use_cookies, custom_proxy=custom_proxy,
+                player_client=player_client or "android,ios,web"
+            )
+            if base_path and os.path.exists(base_path):
+                cached_base = base_path
+                if base_info:
+                    try:
+                        database.set_cached_info(clean_base, json.dumps(base_info), "")
+                    except:
+                        pass
+        
+        if cached_base and os.path.exists(cached_base):
+            ext = os.path.splitext(cached_base)[1].lower()
+            sliced_path = os.path.join(output_dir, f"{safe_id}{ext}")
+            trim_cmd = ["ffmpeg", "-y", "-nostdin"]
+            if start_time:
+                trim_cmd.extend(["-ss", str(start_time)])
+            trim_cmd.extend(["-i", cached_base])
+            if end_time:
+                trim_duration = end_time - (start_time or 0)
+                trim_cmd.extend(["-t", str(trim_duration)])
+            trim_cmd.extend(["-c", "copy", sliced_path])
+            
+            logger.info(f"Slicing audio for {video_id} locally using ffmpeg: {' '.join(trim_cmd)}")
+            p_trim = await asyncio.create_subprocess_exec(
+                *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            await p_trim.communicate()
+            if p_trim.returncode == 0 and os.path.exists(sliced_path):
+                tag_info = dict(base_info or {})
+                if not tag_info:
+                    cached_meta = database.get_cached_info(clean_base)
+                    if cached_meta and cached_meta[0]:
+                        try:
+                            tag_info = json.loads(cached_meta[0])
+                        except:
+                            pass
+                chapters = _get_video_chapters(tag_info)
+                ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
+                if chapter:
+                    tag_info["title"] = chapter["title"]
+                    tag_info["track"] = chapter["title"]
+                    tag_info["album"] = tag_info.get("album") or tag_info.get("title") or "Singles"
+                    tag_info["artist"] = tag_info.get("artist") or tag_info.get("uploader") or tag_info.get("channel") or tag_info.get("creator") or "Unknown Artist"
+                    tag_info["track_number"] = ch_idx + 1
+                    tag_info["total_tracks"] = len(chapters)
+                _tag_audio_file(sliced_path, tag_info, webpage_url=_make_yt_url(clean_base))
+                return sliced_path, tag_info, None
+
+    if duration <= 600:
         fmt = "best"
         format_selector = "ba[acodec=opus]/ba[ext=m4a]/ba/b/best"
         pp_args = []
     else:
-        # For long audio (> 10 min), transcode and compress to Opus 64k mono to stay under 30MB limit
         fmt = "opus"
         format_selector = None
         pp_args = [
@@ -1579,16 +1628,12 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
     safe_id = _get_cache_id(video_id)
     out_template = os.path.join(output_dir, f"{safe_id}.%(ext)s")
     
+    max_filter_dur = max(duration, MAX_DURATION_AUDIO)
     cmd = [
         "yt-dlp",
         "--no-playlist",
+        "--match-filter", f"duration<={max_filter_dur}",
     ]
-    if not (start_time or end_time):
-        cmd.extend(["--match-filter", f"duration<={MAX_DURATION_AUDIO}"])
-    else:
-        s_val = start_time if start_time is not None else 0
-        e_val = end_time if end_time is not None else "inf"
-        cmd.extend(["--download-sections", f"*{s_val}-{e_val}"])
 
     if format_selector:
         cmd.extend(["-f", format_selector])

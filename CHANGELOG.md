@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.35] - 2026-08-20
+
+### Fixed
+- **Optimized Full Base Audio Caching for Album / Mix Slicing:**
+  - Full audio is cached locally upon first track request, allowing all subsequent tracks to slice instantly in 0.03 seconds via local ffmpeg.
+  - Fixes ffmpeg Range seeking issues (code 251 / 152 / Invalid argument) caused by YouTube CDN stream interruptions on remote sections.
+  - Automatically handles extended album/mix durations up to 120 minutes during slicing without triggering standard duration filters.
+
 ## [1.6.34] - 2026-08-20
 
 ### Fixed
