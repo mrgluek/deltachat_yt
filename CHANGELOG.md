@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.36] - 2026-08-20
+
+### Improved
+- **Original Stereo Audio Stream Preservation for Slicing:**
+  - Base audio downloaded for track slicing is now always preserved in its native original stereo stream format (`.m4a` AAC stereo or `.opus` Opus stereo) without mono compression downsampling.
+  - Slices inherit the untouched original YouTube audio stream quality bit-for-bit.
+
 ## [1.6.35] - 2026-08-20
 
 ### Fixed

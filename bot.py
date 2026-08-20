@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.35"
+VERSION = "1.6.36"
 
 dc_cli = BotCli("ytbot")
 
@@ -1468,7 +1468,7 @@ def _process_subtitles_and_lyrics(output_dir: str, safe_id: str, audio_path: str
         return None, None
 
 
-async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None, player_client: str = None) -> tuple[str | None, dict | None, str | None]:
+async def _download_audio(video_id: str, output_dir: str, duration: int, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None, player_client: str = None, for_slicing: bool = False) -> tuple[str | None, dict | None, str | None]:
     url = _make_yt_url(video_id)
     if "music.yandex." in url:
         token = os.getenv("YANDEX_TOKEN")
@@ -1565,7 +1565,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 clean_base, CACHE_DIR, max(duration, 7200),
                 start_time=None, end_time=None,
                 use_cookies=use_cookies, custom_proxy=custom_proxy,
-                player_client=player_client or "android,ios,web"
+                player_client=player_client or "android,ios,web",
+                for_slicing=True
             )
             if base_path and os.path.exists(base_path):
                 cached_base = base_path
@@ -1613,7 +1614,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 _tag_audio_file(sliced_path, tag_info, webpage_url=_make_yt_url(clean_base))
                 return sliced_path, tag_info, None
 
-    if duration <= 600:
+    if duration <= 600 or for_slicing:
         fmt = "best"
         format_selector = "ba[acodec=opus]/ba[ext=m4a]/ba/b/best"
         pp_args = []
