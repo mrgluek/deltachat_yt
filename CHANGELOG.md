@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.32] - 2026-08-20
+
+### Added
+- **Track & Chapter-Based Slicing:**
+  - Automatically parses YouTube chapters from video metadata and description tracklists (supporting standard timestamps, bracketed timestamps, and inline markdown links).
+  - Previews now offer Track 1 (with exact chapter boundaries and track title) instead of arbitrary 10-minute blocks when chapters are present.
+  - Video and audio downloads embed track title, album, artist, track number, and total track count into audio tags (ID3, Vorbis, MP4, FLAC).
+  - Fast partial downloads with `yt-dlp --download-sections "*start-end"` via HTTP range requests, downloading only the requested track bytes without full video stream downloads or transcoding.
+- **Navidrome (`/ytms`) Chapter Integration:**
+  - Saving chapter slices via `/ytms` organizes files with the track's title (e.g. `<Artist>/<Album>/<Track Title>.<ext>`) with full metadata tags.
+  - Slices from long videos/mixes (> 60 min) are allowed based on the track's effective duration.
+- **1-Tap Next Track Navigation:**
+  - After downloading or saving a track, the bot automatically offers the command to download or save the next track in the playlist.
+
 ## [1.6.31] - 2026-08-19
 
 ### Fixed

@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.31"
+VERSION = "1.6.32"
 
 dc_cli = BotCli("ytbot")
 
@@ -214,6 +214,129 @@ def _parse_single_time_str(val: str) -> int | None:
         if s: total_seconds += int(s)
         return total_seconds
     return None
+
+
+def _parse_timestamp_to_seconds(ts: str) -> int:
+    """Convert timestamp string (e.g. '4:39', '04:39', '1:02:04') to seconds."""
+    parts = [int(p) for p in ts.strip().split(":")]
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    elif len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    return 0
+
+
+def _extract_chapters_from_description(desc: str, total_duration: int = 0) -> list[dict]:
+    """Parse tracklist/chapters from video description text."""
+    if not desc:
+        return []
+
+    lines = desc.splitlines()
+    raw_chapters = []
+
+    for line in lines:
+        line_str = line.strip()
+        if not line_str:
+            continue
+        m = re.search(r"(?:\[|\()?(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?:\]|\))?(?:\([^)]*\))?", line_str)
+        if m:
+            ts_match = re.search(r"(?:(\d{1,2}):)?(\d{1,2}):(\d{2})", m.group(0))
+            if ts_match:
+                ts_str = ts_match.group(0)
+                sec = _parse_timestamp_to_seconds(ts_str)
+                title = line_str[:m.start()] + line_str[m.end():]
+                title = re.sub(r"^\s*(?:\d+[\.\)]|\-|\–|\—|:)\s*", "", title)
+                title = title.strip(" -–—:\t\r\n|[]()")
+                if title:
+                    raw_chapters.append({"start_time": sec, "title": title})
+
+    if len(raw_chapters) < 2:
+        matches = list(re.finditer(r"(?:\[|\()?(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?:\]|\))?(?:\([^)]*\))?", desc))
+        if len(matches) >= 2:
+            inline_chapters = []
+            for i, m in enumerate(matches):
+                ts_match = re.search(r"(?:(\d{1,2}):)?(\d{1,2}):(\d{2})", m.group(0))
+                if ts_match:
+                    sec = _parse_timestamp_to_seconds(ts_match.group(0))
+                    start_pos = m.end()
+                    end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(desc)
+                    chunk = desc[start_pos:end_pos].strip()
+                    title = re.sub(r"^\s*(?:\d+[\.\)]|\-|\–|\—|:)\s*", "", chunk)
+                    title = title.strip(" -–—:\t\r\n|[]()")
+                    if title:
+                        inline_chapters.append({"start_time": sec, "title": title})
+            if len(inline_chapters) >= 2:
+                raw_chapters = inline_chapters
+
+    if len(raw_chapters) < 2:
+        return []
+
+    raw_chapters.sort(key=lambda x: x["start_time"])
+    unique_chapters = []
+    seen_starts = set()
+    for c in raw_chapters:
+        if c["start_time"] not in seen_starts:
+            seen_starts.add(c["start_time"])
+            unique_chapters.append(c)
+
+    if len(unique_chapters) < 2:
+        return []
+
+    result = []
+    for i, c in enumerate(unique_chapters):
+        st = c["start_time"]
+        if i + 1 < len(unique_chapters):
+            et = unique_chapters[i + 1]["start_time"]
+        else:
+            et = total_duration if total_duration > st else st + 300
+        if et > st:
+            result.append({"start_time": st, "end_time": et, "title": c["title"]})
+
+    return result
+
+
+def _get_video_chapters(info: dict | None) -> list[dict]:
+    """Extract and normalize list of chapters from yt-dlp info dictionary."""
+    if not info:
+        return []
+    raw_chapters = info.get("chapters")
+    total_dur = int(info.get("duration", 0) or 0)
+
+    if raw_chapters and isinstance(raw_chapters, list) and len(raw_chapters) >= 2:
+        chapters = []
+        for i, c in enumerate(raw_chapters):
+            if not isinstance(c, dict):
+                continue
+            st = int(round(float(c.get("start_time", 0) or 0)))
+            raw_et = c.get("end_time")
+            if raw_et is not None:
+                et = int(round(float(raw_et)))
+            elif i + 1 < len(raw_chapters) and isinstance(raw_chapters[i + 1], dict):
+                et = int(round(float(raw_chapters[i + 1].get("start_time", 0) or 0)))
+            else:
+                et = total_dur if total_dur > st else st + 300
+            title = str(c.get("title") or f"Track {i + 1}").strip()
+            if et > st:
+                chapters.append({"start_time": st, "end_time": et, "title": title})
+        if len(chapters) >= 2:
+            chapters.sort(key=lambda x: x["start_time"])
+            return chapters
+
+    return _extract_chapters_from_description(info.get("description", "") or "", total_dur)
+
+
+def _find_chapter(chapters: list[dict], start_time: int | None, end_time: int | None) -> tuple[int | None, dict | None]:
+    """Find the chapter corresponding to start_time and optional end_time."""
+    if not chapters or start_time is None:
+        return None, None
+    for idx, c in enumerate(chapters):
+        st = c.get("start_time", 0)
+        et = c.get("end_time", 0)
+        if abs(st - start_time) <= 2:
+            return idx, c
+        if st <= start_time < et:
+            return idx, c
+    return None, None
 
 
 
@@ -468,13 +591,13 @@ def _format_time_range(start_sec: int, end_sec: int) -> str:
 
 def _get_base_video_id(video_id: str) -> str:
     """Extract clean video ID or short hash without query string or time range parameters."""
+    m_yt = YT_URL_RE.search(video_id)
+    if m_yt:
+        return m_yt.group(1)
     base = video_id.split('?')[0].split('&')[0]
     m_range = re.match(r'^([a-zA-Z0-9_-]{11,16})_\d+_\d+$', base)
     if m_range:
-        base = m_range.group(1)
-    m_yt = YT_URL_RE.search(base)
-    if m_yt:
-        return m_yt.group(1)
+        return m_range.group(1)
     return base
 
 
@@ -839,19 +962,21 @@ async def _fetch_video_info_with_fallback(video_id: str) -> tuple[dict | None, s
 
 async def _download_video(video_id: str, output_dir: str, max_height: int = 480, start_time: int = None, end_time: int = None, use_cookies: bool = True, custom_proxy: str = None, player_client: str = None) -> tuple[str | None, dict | None, str | None]:
     """Download video. Returns (filepath, info_dict, error_string)."""
-    out_template = os.path.join(output_dir, "%(id)s_%(title).50s.%(ext)s")
-    if start_time or end_time:
-        max_duration = 7200  # Allow up to 2 hours if trimming is requested
-    else:
-        max_duration = MAX_DURATION_VIDEO
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "--match-filter", f"duration<={max_duration}",
         "-f", f"bv[height<={max_height}]+ba/b[height<={max_height}]/bv*+ba/b/best",
     ]
     if not start_time and not end_time:
-        cmd.extend(["--max-filesize", f"{MAX_FILESIZE_MB}M"])
+        cmd.extend([
+            "--match-filter", f"duration<={MAX_DURATION_VIDEO}",
+            "--max-filesize", f"{MAX_FILESIZE_MB}M",
+        ])
+    else:
+        s_val = start_time if start_time is not None else 0
+        e_val = end_time if end_time is not None else "inf"
+        cmd.extend(["--download-sections", f"*{s_val}-{e_val}"])
+
     cmd.extend([
         "--merge-output-format", "mp4",
         "--no-abort-on-error",
@@ -1109,6 +1234,8 @@ def _tag_audio_file(filepath: str, info: dict, webpage_url: str = None):
         year = str(info.get("release_year") or info.get("year") or "")
         lyrics = info.get("lyrics") or ""
         url = webpage_url or info.get("webpage_url") or ""
+        track_num = info.get("track_number")
+        total_tracks = info.get("total_tracks")
 
         # Fetch cover bytes if thumbnail URL is provided
         cover_bytes = None
@@ -1122,7 +1249,7 @@ def _tag_audio_file(filepath: str, info: dict, webpage_url: str = None):
                 logger.debug(f"Could not download thumbnail for audio tagging from {thumbnail_url}: {e}")
 
         if ext == ".mp3":
-            from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TDRC, COMM, APIC, USLT, ID3NoHeaderError
+            from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TDRC, COMM, APIC, USLT, TRCK, ID3NoHeaderError
             try:
                 tags = ID3(filepath)
             except ID3NoHeaderError:
@@ -1136,6 +1263,9 @@ def _tag_audio_file(filepath: str, info: dict, webpage_url: str = None):
                 tags["TALB"] = TALB(encoding=3, text=album)
             if year:
                 tags["TDRC"] = TDRC(encoding=3, text=year)
+            if track_num:
+                trck_str = f"{track_num}/{total_tracks}" if total_tracks else str(track_num)
+                tags["TRCK"] = TRCK(encoding=3, text=trck_str)
             if url:
                 tags["COMM:desc:eng"] = COMM(encoding=3, lang='eng', desc='description', text=url)
                 tags["COMM::eng"] = COMM(encoding=3, lang='eng', desc='', text=url)
@@ -1168,6 +1298,10 @@ def _tag_audio_file(filepath: str, info: dict, webpage_url: str = None):
                 audio["album"] = album
             if year:
                 audio["date"] = year
+            if track_num:
+                audio["tracknumber"] = str(track_num)
+                if total_tracks:
+                    audio["tracktotal"] = str(total_tracks)
             if url:
                 audio["description"] = url
                 audio["comment"] = url
@@ -1199,6 +1333,11 @@ def _tag_audio_file(filepath: str, info: dict, webpage_url: str = None):
                 audio["\xa9alb"] = album
             if year:
                 audio["\xa9day"] = year
+            if track_num:
+                try:
+                    audio["trkn"] = [(int(track_num), int(total_tracks or 0))]
+                except Exception:
+                    pass
             if url:
                 audio["\xa9des"] = url
                 audio["\xa9cmt"] = url
@@ -1221,6 +1360,10 @@ def _tag_audio_file(filepath: str, info: dict, webpage_url: str = None):
                 audio["album"] = album
             if year:
                 audio["date"] = year
+            if track_num:
+                audio["tracknumber"] = str(track_num)
+                if total_tracks:
+                    audio["tracktotal"] = str(total_tracks)
             if url:
                 audio["description"] = url
                 audio["comment"] = url
@@ -1393,15 +1536,17 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
     safe_id = _get_cache_id(video_id)
     out_template = os.path.join(output_dir, f"{safe_id}.%(ext)s")
     
-    if start_time or end_time:
-        max_duration = 7200  # Allow up to 2 hours if trimming is requested
-    else:
-        max_duration = MAX_DURATION_AUDIO
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "--match-filter", f"duration<={max_duration}",
     ]
+    if not (start_time or end_time):
+        cmd.extend(["--match-filter", f"duration<={MAX_DURATION_AUDIO}"])
+    else:
+        s_val = start_time if start_time is not None else 0
+        e_val = end_time if end_time is not None else "inf"
+        cmd.extend(["--download-sections", f"*{s_val}-{e_val}"])
+
     if format_selector:
         cmd.extend(["-f", format_selector])
 
@@ -1491,39 +1636,21 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         if filepath and os.path.exists(filepath):
             # Process and embed lyrics into audio file & generate standardized .lrc
             _process_subtitles_and_lyrics(output_dir, safe_id, filepath)
-            # Ensure comprehensive tags and cover art are embedded
-            _tag_audio_file(filepath, info, webpage_url=_make_yt_url(video_id))
-            if start_time or end_time:
-                ext = os.path.splitext(filepath)[1]
-                trimmed_filepath = os.path.splitext(filepath)[0] + f"_trimmed{ext}"
-                trim_duration = (end_time - (start_time or 0)) if end_time else None
-                trim_cmd = [
-                    "ffmpeg", "-y", "-nostdin"
-                ]
-                if start_time:
-                    trim_cmd.extend(["-ss", str(start_time)])
-                trim_cmd.extend(["-i", filepath])
-                if trim_duration is not None:
-                    trim_cmd.extend(["-t", str(trim_duration)])
-                trim_cmd.extend([
-                    "-c", "copy",
-                    trimmed_filepath
-                ])
-                try:
-                    logger.info(f"Trimming audio starting from {start_time or 0}s (duration: {trim_duration or 'inf'}s) locally using ffmpeg...")
-                    proc_trim = await asyncio.create_subprocess_exec(
-                        *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                        stdin=asyncio.subprocess.DEVNULL
-                    )
-                    await proc_trim.communicate()
-                    if proc_trim.returncode == 0 and os.path.exists(trimmed_filepath):
-                        os.remove(filepath)
-                        filepath = trimmed_filepath
-                    else:
-                        logger.error(f"ffmpeg audio trim failed with code {proc_trim.returncode}")
-                except Exception as e:
-                    logger.error(f"Error during local ffmpeg audio trim: {e}")
 
+            # Resolve chapter if start_time / end_time is specified
+            chapters = _get_video_chapters(info)
+            ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
+            tag_info = dict(info)
+            if chapter:
+                tag_info["title"] = chapter["title"]
+                tag_info["track"] = chapter["title"]
+                tag_info["album"] = info.get("album") or info.get("title") or "Singles"
+                tag_info["artist"] = info.get("artist") or info.get("uploader") or info.get("channel") or info.get("creator") or "Unknown Artist"
+                tag_info["track_number"] = ch_idx + 1
+                tag_info["total_tracks"] = len(chapters)
+
+            # Ensure comprehensive tags and cover art are embedded
+            _tag_audio_file(filepath, tag_info, webpage_url=_make_yt_url(video_id))
             size = os.path.getsize(filepath)
             if size > MAX_FILESIZE_BYTES:
                 os.remove(filepath)
@@ -1931,15 +2058,25 @@ def _save_to_navidrome(filepath: str, info: dict, music_dir: str, video_id: str 
     Returns (destination_audio_path, destination_lrc_path, error_message).
     """
     try:
-        artist = (
-            info.get("artist")
-            or info.get("uploader")
-            or info.get("channel")
-            or info.get("creator")
-            or "Unknown Artist"
-        )
-        album = info.get("album") or "Singles"
-        title = info.get("track") or info.get("title") or "Unknown Track"
+        chapters = _get_video_chapters(info)
+        full_url = _extract_video_id(video_id) if video_id else ""
+        start_time, end_time = _parse_time_param(full_url) if full_url else (None, None)
+        ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
+
+        if chapter:
+            title = chapter.get("title") or info.get("track") or info.get("title") or "Unknown Track"
+            album = info.get("album") or info.get("title") or "Singles"
+            artist = info.get("artist") or info.get("uploader") or info.get("channel") or info.get("creator") or "Unknown Artist"
+        else:
+            artist = (
+                info.get("artist")
+                or info.get("uploader")
+                or info.get("channel")
+                or info.get("creator")
+                or "Unknown Artist"
+            )
+            album = info.get("album") or "Singles"
+            title = info.get("track") or info.get("title") or "Unknown Track"
         
         artist_clean = _sanitize_filename(artist)
         album_clean = _sanitize_filename(album)
@@ -1957,6 +2094,17 @@ def _save_to_navidrome(filepath: str, info: dict, music_dir: str, video_id: str 
         
         shutil.copy2(filepath, dest_path)
         logger.info(f"Saved audio file to Navidrome directory: {dest_path}")
+
+        # Retag destination file with full chapter metadata
+        tag_info = dict(info)
+        tag_info["title"] = title
+        tag_info["track"] = title
+        tag_info["artist"] = artist
+        tag_info["album"] = album
+        if chapter and ch_idx is not None:
+            tag_info["track_number"] = ch_idx + 1
+            tag_info["total_tracks"] = len(chapters)
+        _tag_audio_file(dest_path, tag_info, webpage_url=_make_yt_url(video_id) if video_id else None)
 
         # Check for companion .lrc file
         dest_lrc = None
@@ -2032,10 +2180,37 @@ async def _do_ytms(bot, accid, msg, video_id: str):
             return
         
         duration = int(info.get("duration", 0))
-        if duration > MAX_DURATION_AUDIO:
-            _react(bot, accid, req_msg_id, "❌")
-            _send(bot, accid, chat_id, f"❌ Audio duration ({_format_duration(duration)}) exceeds maximum allowed ({MAX_DURATION_AUDIO // 60} minutes).")
-            return
+        full_url = _extract_video_id(video_id) or video_id
+        start_time, end_time = _parse_time_param(full_url)
+        chapters = _get_video_chapters(info)
+        ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
+
+        if start_time is not None or end_time is not None:
+            effective_duration = (end_time - (start_time or 0)) if end_time else (duration - (start_time or 0))
+            if effective_duration > 7200:
+                _react(bot, accid, req_msg_id, "❌")
+                _send(bot, accid, chat_id, f"❌ Audio duration ({_format_duration(effective_duration)}) exceeds maximum allowed (120 minutes).")
+                return
+        else:
+            effective_duration = duration
+            if duration > MAX_DURATION_AUDIO:
+                if chapters:
+                    s0 = chapters[0]["start_time"]
+                    e0 = chapters[0]["end_time"]
+                    t0 = chapters[0]["title"]
+                    clean_base = _get_base_video_id(video_id)
+                    if clean_base.startswith("http://") or clean_base.startswith("https://"):
+                        short_id = _get_cache_id(clean_base)
+                        database.add_url_mapping(short_id, clean_base)
+                    else:
+                        short_id = clean_base
+                    _react(bot, accid, req_msg_id, "ℹ️")
+                    _send(bot, accid, chat_id, f"⏱ Total audio duration ({_format_duration(duration)}) exceeds {MAX_DURATION_AUDIO // 60} minutes.\n\nSave individual tracks from tracklist:\n💾 Track 1: {t0} ({_format_time_range(s0, e0)}): /ytms_{short_id}_{s0}_{e0}")
+                    return
+                else:
+                    _react(bot, accid, req_msg_id, "❌")
+                    _send(bot, accid, chat_id, f"❌ Audio duration ({_format_duration(duration)}) exceeds maximum allowed ({MAX_DURATION_AUDIO // 60} minutes).")
+                    return
 
         # 2. Check if already in cache, or download
         cache_path = _find_cached_file(video_id, "audio")
@@ -2093,21 +2268,28 @@ async def _do_ytms(bot, accid, msg, video_id: str):
         )
 
         # 5. Format response message
-        title = info.get("track") or info.get("title") or video_id
-        artist = (
-            info.get("artist")
-            or info.get("uploader")
-            or info.get("channel")
-            or info.get("creator")
-            or "Unknown Artist"
-        )
-        album = info.get("album") or "Singles"
+        if chapter:
+            title = chapter.get("title") or info.get("track") or info.get("title") or video_id
+            album = info.get("album") or info.get("title") or "Singles"
+            artist = info.get("artist") or info.get("uploader") or info.get("channel") or info.get("creator") or "Unknown Artist"
+        else:
+            title = info.get("track") or info.get("title") or video_id
+            artist = (
+                info.get("artist")
+                or info.get("uploader")
+                or info.get("channel")
+                or info.get("creator")
+                or "Unknown Artist"
+            )
+            album = info.get("album") or "Singles"
+
         rel_path = os.path.relpath(dest_path, music_dir)
-        dur_str = _format_duration(duration) if duration else "?"
+        dur_str = _format_duration(effective_duration) if effective_duration else "?"
         filesize = os.path.getsize(filepath)
         size_str = _format_size(filesize)
         ext_str = os.path.splitext(filepath)[1].lower().replace(".", "").upper()
         lyrics_suffix = " + 📝 Lyrics" if dest_lrc else ""
+        clean_base = _get_base_video_id(video_id)
 
         caption = (
             f"💾 **Saved to Navidrome library!**\n\n"
@@ -2116,12 +2298,28 @@ async def _do_ytms(bot, accid, msg, video_id: str):
             f"💿 **Album:** {album}\n"
             f"📁 **Path:** `{rel_path}` ({dur_str}, {size_str}, {ext_str}{lyrics_suffix})\n"
             f"🔄 **Navidrome Scan:** {scan_msg}\n\n"
-            f"🔗 {_make_yt_url(video_id)}"
+            f"🔗 {_make_yt_url(clean_base)}"
         )
+
+        if chapter and ch_idx is not None and ch_idx + 1 < len(chapters):
+            next_ch = chapters[ch_idx + 1]
+            next_s = next_ch["start_time"]
+            next_e = next_ch["end_time"]
+            next_title = next_ch["title"]
+            next_range_str = _format_time_range(next_s, next_e)
+            
+            if clean_base.startswith("http://") or clean_base.startswith("https://"):
+                short_id = _get_cache_id(clean_base)
+                database.add_url_mapping(short_id, clean_base)
+            else:
+                short_id = clean_base
+            
+            caption += f"\n\n▶️ Next track: {next_title} ({next_range_str}): /ytms_{short_id}_{next_s}_{next_e}"
+            caption += f"\n💿 Download audio: /ytm_{short_id}_{next_s}_{next_e}"
 
         _send(bot, accid, chat_id, caption)
         _react(bot, accid, req_msg_id, "☑️")
-        database.add_download(chat_id, msg.from_id, video_id, title, duration, "audio_navidrome", filesize)
+        database.add_download(chat_id, msg.from_id, video_id, title, int(effective_duration or 0), "audio_navidrome", filesize)
 
     except Exception as e:
         logger.error(f"Error in _do_ytms for {video_id}: {e}", exc_info=True)
@@ -2383,13 +2581,16 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
     duration = total_duration
     full_url = _extract_video_id(video_id) or video_id
     start_time, end_time = _parse_time_param(full_url)
+    chapters = _get_video_chapters(info) if info else []
+    ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
+
     if duration:
-        if start_time:
-            if end_time:
+        if start_time is not None:
+            if end_time is not None:
                 duration = max(0, end_time - start_time)
             else:
                 duration = max(0, duration - start_time)
-        elif end_time:
+        elif end_time is not None:
             duration = max(0, end_time)
     filesize = os.path.getsize(filepath)
     dur_str = _format_duration(int(duration)) if duration else "?"
@@ -2397,6 +2598,14 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
 
     ext = os.path.splitext(filepath)[1].lower().replace(".", "").upper()
     clean_base = _get_base_video_id(video_id)
+    if clean_base.startswith("http://") or clean_base.startswith("https://"):
+        short_id = _get_cache_id(clean_base)
+        database.add_url_mapping(short_id, clean_base)
+    else:
+        short_id = clean_base
+
+    is_admin = _is_dc_admin(bot, accid, msg.from_id)
+
     if download_type == "video":
         chunk_s = start_time or 0
         chunk_e = end_time if end_time else (chunk_s + int(duration or 0))
@@ -2406,25 +2615,55 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
             range_str = _format_time_range(chunk_s, chunk_e)
             range_suffix = f" [{range_str}]"
             
-        caption = f"📺 {title}{range_suffix} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
+        if chapter:
+            track_num = ch_idx + 1
+            caption = f"📺 {title} - Track {track_num}. {chapter['title']}{range_suffix} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
+        else:
+            caption = f"📺 {title}{range_suffix} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
         
-        # Check if there is a next chunk to offer
-        if total_duration and total_duration > chunk_e:
+        # Check if there is a next track or chunk to offer
+        if chapter and ch_idx is not None and ch_idx + 1 < len(chapters):
+            next_ch = chapters[ch_idx + 1]
+            next_s = next_ch["start_time"]
+            next_e = next_ch["end_time"]
+            next_title = next_ch["title"]
+            next_range_str = _format_time_range(next_s, next_e)
+            next_cmd = f"/yt_{short_id}_{next_s}_{next_e}"
+            caption += f"\n\n▶️ Next track: {next_title} ({next_range_str}): {next_cmd}"
+        elif total_duration and total_duration > chunk_e:
             next_s = chunk_e
             next_e = min(total_duration, next_s + 600)
             next_range_str = _format_time_range(next_s, next_e)
-            
-            clean_base = _get_base_video_id(video_id)
-            if clean_base.startswith("http://") or clean_base.startswith("https://"):
-                short_id = _get_cache_id(clean_base)
-                database.add_url_mapping(short_id, clean_base)
-            else:
-                short_id = clean_base
-                
             next_cmd = f"/yt_{short_id}_{next_s}_{next_e}"
             caption += f"\n\n▶️ Next chunk ({next_range_str}): {next_cmd}"
     else:
-        caption = f"🎵 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(video_id)}"
+        if chapter:
+            range_str = _format_time_range(start_time or 0, end_time or int(duration or 0))
+            caption = f"🎵 {chapter['title']} [{range_str}] ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
+            if ch_idx is not None and ch_idx + 1 < len(chapters):
+                next_ch = chapters[ch_idx + 1]
+                next_s = next_ch["start_time"]
+                next_e = next_ch["end_time"]
+                next_title = next_ch["title"]
+                next_range_str = _format_time_range(next_s, next_e)
+                next_cmd = f"/ytm_{short_id}_{next_s}_{next_e}"
+                caption += f"\n\n▶️ Next track: {next_title} ({next_range_str}): {next_cmd}"
+                if is_admin:
+                    nav_cmd = f"/ytms_{short_id}_{next_s}_{next_e}"
+                    caption += f"\n💾 Save to Navidrome: {nav_cmd}"
+        else:
+            caption = f"🎵 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
+            if (start_time is not None or end_time is not None) and total_duration:
+                chunk_e = end_time if end_time else (start_time or 0) + int(duration or 0)
+                if total_duration > chunk_e:
+                    next_s = chunk_e
+                    next_e = min(total_duration, next_s + 600)
+                    next_range_str = _format_time_range(next_s, next_e)
+                    next_cmd = f"/ytm_{short_id}_{next_s}_{next_e}"
+                    caption += f"\n\n▶️ Next chunk ({next_range_str}): {next_cmd}"
+                    if is_admin:
+                        nav_cmd = f"/ytms_{short_id}_{next_s}_{next_e}"
+                        caption += f"\n💾 Save to Navidrome: {nav_cmd}"
 
     _send(bot, accid, chat_id, caption, file=filepath)
 
@@ -3061,16 +3300,23 @@ def _handle_link_info(bot, accid, msg, video_id: str):
 def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: str | None):
     """Helper to format and send the link info message."""
     title = info.get("title", "Unknown")
-    original_duration = info.get("duration", 0)
+    original_duration = int(info.get("duration", 0) or 0)
     duration = original_duration
-    start_time, end_time = _parse_time_param(video_id)
-    if duration:
-        if start_time:
-            if end_time:
+    full_url = _extract_video_id(video_id) or video_id
+    start_time, end_time = _parse_time_param(full_url)
+    chapters = _get_video_chapters(info)
+    ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
+
+    # Determine effective duration
+    if chapter:
+        duration = max(0, chapter["end_time"] - chapter["start_time"])
+    elif duration:
+        if start_time is not None:
+            if end_time is not None:
                 duration = max(0, end_time - start_time)
             else:
                 duration = max(0, duration - start_time)
-        elif end_time:
+        elif end_time is not None:
             duration = max(0, end_time)
         
     dur_str = _format_duration(int(duration)) if duration else "?"
@@ -3131,7 +3377,7 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
             if target_f:
                 fs = target_f.get('filesize') or target_f.get('filesize_approx')
                 if fs:
-                    if start_time and original_duration:
+                    if original_duration:
                         fs = fs * (duration / original_duration)
                     audio_mb = fs / 1048576
                 else:
@@ -3152,7 +3398,7 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
             if f.get('height') == target_height and f.get('vcodec') != 'none':
                 fs = f.get('filesize') or f.get('filesize_approx')
                 if fs:
-                    if start_time and original_duration:
+                    if original_duration:
                         fs = fs * (duration / original_duration)
                     video_mb = fs / 1048576
                     break
@@ -3164,52 +3410,115 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
             
         video_size_str = f"~{min(video_mb, float(MAX_FILESIZE_MB)):.1f} MB"
 
-    video_url = _make_yt_url(video_id)
-
-    if video_id.startswith("http://") or video_id.startswith("https://"):
-        short_id = _get_cache_id(video_id)
-        database.add_url_mapping(short_id, video_id)
+    clean_base = _get_base_video_id(video_id)
+    if clean_base.startswith("http://") or clean_base.startswith("https://"):
+        short_id = _get_cache_id(clean_base)
+        database.add_url_mapping(short_id, clean_base)
     else:
-        short_id = video_id
+        short_id = clean_base
 
-    aud_cmd = f"/ytm_{short_id}"
-
-    if original_duration > 600:
-        chunk_s = start_time or 0
-        chunk_e = min(original_duration, chunk_s + 600)
-        part_num = (chunk_s // 600) + 1
-        range_label = _format_time_range(chunk_s, chunk_e)
-        vid_cmd = f"/yt_{short_id}_{chunk_s}_{chunk_e}"
-        part_prefix = f"Part {part_num} " if part_num > 1 or original_duration > 600 else ""
-        video_btn = f"📼 {part_prefix}({range_label}) {vid_cmd}"
-    else:
-        vid_cmd = f"/yt_{short_id}"
-        can_video = duration <= MAX_DURATION_VIDEO
-        video_btn = f"📼 {target_height}p ({video_size_str}) {vid_cmd}" if can_video else f"📼 Too long (> {MAX_DURATION_VIDEO // 60}m)"
-
-    can_audio = duration <= MAX_DURATION_AUDIO
-    audio_btn = f"💿 {audio_fmt} ({audio_size_str}) {aud_cmd}" if can_audio else f"💿 Too long (> {MAX_DURATION_AUDIO // 60}m)"
-
+    video_url = _make_yt_url(clean_base)
     is_audio_only = bool(AUDIO_ONLY_URL_RE.search(video_url))
     is_admin = _is_dc_admin(bot, accid, msg.from_id)
-    nav_btn = f"💾 /ytms_{short_id}" if is_admin and can_audio else ""
 
-    if is_audio_only:
-        btn_line = f"{audio_btn}   {nav_btn}" if nav_btn else audio_btn
-        lines = [
-            f"🎵 [Audio: \"{title}\" ({dur_str})]({video_url})",
-            "",
-            btn_line
-        ]
+    if chapter:
+        track_num = ch_idx + 1
+        c_start = chapter["start_time"]
+        c_end = chapter["end_time"]
+        range_label = _format_time_range(c_start, c_end)
+        vid_cmd = f"/yt_{short_id}_{c_start}_{c_end}"
+        aud_cmd = f"/ytm_{short_id}_{c_start}_{c_end}"
+        video_btn = f"📼 Track {track_num} ({range_label}) {vid_cmd}"
+        audio_btn = f"💿 Track {track_num} ({audio_fmt}, {audio_size_str}) {aud_cmd}"
+        nav_btn = f"💾 /ytms_{short_id}_{c_start}_{c_end}" if is_admin else ""
+        
+        if is_audio_only:
+            btn_line = f"{audio_btn}   {nav_btn}" if nav_btn else audio_btn
+            lines = [
+                f"🎵 [Audio: \"{title}\" - Track {track_num}. {chapter['title']} ({dur_str})]({video_url})",
+                "",
+                btn_line
+            ]
+        else:
+            btn_line = f"{video_btn}   {audio_btn}"
+            if nav_btn:
+                btn_line += f"   {nav_btn}"
+            lines = [
+                f"📺 [Video: \"{title}\" - Track {track_num}. {chapter['title']} ({dur_str})]({video_url})",
+                "",
+                btn_line
+            ]
+    elif start_time is None and end_time is None and chapters:
+        c0 = chapters[0]
+        s0 = c0["start_time"]
+        e0 = c0["end_time"]
+        t0 = c0["title"]
+        ch_dur = e0 - s0
+        c0_size_str = audio_size_str
+        if original_duration and ch_dur:
+            ch_mb = (ch_dur * 128) / 8192
+            c0_size_str = f"~{ch_mb:.1f} MB"
+        range_label = _format_time_range(s0, e0)
+        vid_cmd = f"/yt_{short_id}_{s0}_{e0}"
+        aud_cmd = f"/ytm_{short_id}_{s0}_{e0}"
+        video_btn = f"📼 Track 1 ({range_label}) {vid_cmd}"
+        audio_btn = f"💿 Track 1 ({audio_fmt}, {c0_size_str}) {aud_cmd}"
+        nav_btn = f"💾 /ytms_{short_id}_{s0}_{e0}" if is_admin else ""
+        total_dur_str = _format_duration(original_duration)
+
+        if is_audio_only:
+            btn_line = f"{audio_btn}   {nav_btn}" if nav_btn else audio_btn
+            lines = [
+                f"🎵 [Audio: \"{title}\" ({total_dur_str}, {len(chapters)} tracks)]({video_url})",
+                f"Track 1: {t0} ({range_label})",
+                "",
+                btn_line
+            ]
+        else:
+            btn_line = f"{video_btn}   {audio_btn}"
+            if nav_btn:
+                btn_line += f"   {nav_btn}"
+            lines = [
+                f"📺 [Video: \"{title}\" ({total_dur_str}, {len(chapters)} tracks)]({video_url})",
+                f"Track 1: {t0} ({range_label})",
+                "",
+                btn_line
+            ]
     else:
-        btn_line = f"{video_btn}   {audio_btn}"
-        if nav_btn:
-            btn_line += f"   {nav_btn}"
-        lines = [
-            f"📺 [Video: \"{title}\" ({dur_str})]({video_url})",
-            "",
-            btn_line
-        ]
+        aud_cmd = f"/ytm_{short_id}"
+        if original_duration > 600:
+            chunk_s = start_time or 0
+            chunk_e = min(original_duration, chunk_s + 600)
+            part_num = (chunk_s // 600) + 1
+            range_label = _format_time_range(chunk_s, chunk_e)
+            vid_cmd = f"/yt_{short_id}_{chunk_s}_{chunk_e}"
+            part_prefix = f"Part {part_num} " if part_num > 1 or original_duration > 600 else ""
+            video_btn = f"📼 {part_prefix}({range_label}) {vid_cmd}"
+        else:
+            vid_cmd = f"/yt_{short_id}"
+            can_video = duration <= MAX_DURATION_VIDEO
+            video_btn = f"📼 {target_height}p ({video_size_str}) {vid_cmd}" if can_video else f"📼 Too long (> {MAX_DURATION_VIDEO // 60}m)"
+
+        can_audio = duration <= MAX_DURATION_AUDIO
+        audio_btn = f"💿 {audio_fmt} ({audio_size_str}) {aud_cmd}" if can_audio else f"💿 Too long (> {MAX_DURATION_AUDIO // 60}m)"
+        nav_btn = f"💾 /ytms_{short_id}" if is_admin and can_audio else ""
+
+        if is_audio_only:
+            btn_line = f"{audio_btn}   {nav_btn}" if nav_btn else audio_btn
+            lines = [
+                f"🎵 [Audio: \"{title}\" ({dur_str})]({video_url})",
+                "",
+                btn_line
+            ]
+        else:
+            btn_line = f"{video_btn}   {audio_btn}"
+            if nav_btn:
+                btn_line += f"   {nav_btn}"
+            lines = [
+                f"📺 [Video: \"{title}\" ({dur_str})]({video_url})",
+                "",
+                btn_line
+            ]
 
     _send(bot, accid, msg.chat_id, "\n".join(lines), file=thumb_path)
 
