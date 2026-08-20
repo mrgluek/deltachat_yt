@@ -58,8 +58,8 @@ class TestServiceStatusDiagnostics(unittest.TestCase):
                     pass
 
     def test_version_bumped(self):
-        """Test bot.VERSION is 1.6.32."""
-        self.assertEqual(bot.VERSION, "1.6.32")
+        """Test bot.VERSION is 1.6.33."""
+        self.assertEqual(bot.VERSION, "1.6.33")
 
     def test_sanitize_cookies_file_in_place(self):
         """Test _sanitize_cookies_file rewrites invalid cookie file on disk to valid Netscape format."""

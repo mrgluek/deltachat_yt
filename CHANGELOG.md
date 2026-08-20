@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.33] - 2026-08-20
+
+### Fixed
+- **Mobile Client Fallback for Chapter/Section Downloads:**
+  - Configured `yt-dlp` to automatically use `player_client=android,ios,web` when downloading section slices (`start_time` / `end_time`).
+  - Added detection of ffmpeg external downloader exit codes (`ERROR: ffmpeg exited with code...`) to automatically trigger mobile player client retries, preventing 403 Forbidden errors when ffmpeg accesses YouTube media URLs directly.
+
 ## [1.6.32] - 2026-08-20
 
 ### Added

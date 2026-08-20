@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.32"
+VERSION = "1.6.33"
 
 dc_cli = BotCli("ytbot")
 
@@ -990,8 +990,12 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         "--print-json",
         "-o", out_template,
     ])
-    if player_client:
-        cmd.extend(["--extractor-args", f"youtube:player_client={player_client}"])
+    effective_player_client = player_client
+    if not effective_player_client and (start_time is not None or end_time is not None):
+        effective_player_client = "android,ios,web"
+
+    if effective_player_client:
+        cmd.extend(["--extractor-args", f"youtube:player_client={effective_player_client}"])
     
     url = _make_yt_url(video_id)
     active_proxy = custom_proxy if custom_proxy is not None else PROXY
@@ -1016,8 +1020,8 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
 
         if proc.returncode != 0:
             err = stderr.decode(errors='replace').strip()
-            if not player_client and ("403" in err or "Forbidden" in err or "requested format is not available" in err.lower()):
-                logger.info(f"Received 403/format issue downloading video for {video_id}. Retrying with mobile player_client...")
+            if not player_client and ("403" in err or "forbidden" in err.lower() or "ffmpeg exited with code" in err.lower() or "requested format is not available" in err.lower()):
+                logger.info(f"Received 403/format/ffmpeg issue downloading video for {video_id}. Retrying with mobile player_client...")
                 return await _download_video(video_id, output_dir, max_height, start_time, end_time, use_cookies=use_cookies, custom_proxy=custom_proxy, player_client="android,ios,web")
 
             if "duration" in err.lower() or "filter" in err.lower():
@@ -1572,8 +1576,12 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         "--print-json",
         "-o", out_template,
     ])
-    if player_client:
-        cmd.extend(["--extractor-args", f"youtube:player_client={player_client}"])
+    effective_player_client = player_client
+    if not effective_player_client and (start_time is not None or end_time is not None):
+        effective_player_client = "android,ios,web"
+
+    if effective_player_client:
+        cmd.extend(["--extractor-args", f"youtube:player_client={effective_player_client}"])
     if pp_args:
         cmd.extend(pp_args)
     
@@ -1597,8 +1605,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
 
         if proc.returncode != 0:
             err = stderr.decode(errors='replace').strip()
-            if not player_client and ("403" in err or "Forbidden" in err or "requested format is not available" in err.lower()):
-                logger.info(f"Received 403/format issue downloading audio for {video_id}. Retrying with mobile player_client...")
+            if not player_client and ("403" in err or "forbidden" in err.lower() or "ffmpeg exited with code" in err.lower() or "requested format is not available" in err.lower()):
+                logger.info(f"Received 403/format/ffmpeg issue downloading audio for {video_id}. Retrying with mobile player_client...")
                 return await _download_audio(video_id, output_dir, duration, start_time=start_time, end_time=end_time, use_cookies=use_cookies, custom_proxy=custom_proxy, player_client="android,ios,web")
 
             if "duration" in err.lower() or "filter" in err.lower():
