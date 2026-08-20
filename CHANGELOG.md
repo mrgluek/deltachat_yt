@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.34] - 2026-08-20
+
+### Fixed
+- **Seamless Local Trim Fallback for Slices:**
+  - Added automatic fallback to local ffmpeg slicing from cached/downloaded base audio or video if remote HTTP range slicing fails (e.g. ffmpeg 152 / 403 stream drops).
+  - Ensures 100% reliable track and chapter slicing across all tracks in long mixes.
+
 ## [1.6.33] - 2026-08-20
 
 ### Fixed

@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.33"
+VERSION = "1.6.34"
 
 dc_cli = BotCli("ytbot")
 
@@ -1020,6 +1020,45 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
 
         if proc.returncode != 0:
             err = stderr.decode(errors='replace').strip()
+            if (start_time is not None or end_time is not None) and ("ffmpeg exited with code" in err.lower() or "403" in err or "forbidden" in err.lower()):
+                clean_base = _get_base_video_id(video_id)
+                logger.info(f"Video section download failed for {video_id} ({err[:100]}). Falling back to local trim from base video {clean_base}...")
+                cached_base = _find_cached_file(clean_base, "video")
+                base_info = None
+                if not cached_base:
+                    base_path, base_info, base_err = await _download_video(
+                        clean_base, output_dir, max_height,
+                        start_time=None, end_time=None,
+                        use_cookies=use_cookies, custom_proxy=custom_proxy,
+                        player_client=player_client or "android,ios,web"
+                    )
+                    if base_path and os.path.exists(base_path):
+                        cached_base = base_path
+                
+                if cached_base and os.path.exists(cached_base):
+                    safe_id = _get_cache_id(video_id)
+                    sliced_path = os.path.join(output_dir, f"{safe_id}.mp4")
+                    trim_cmd = ["ffmpeg", "-y", "-nostdin"]
+                    if start_time:
+                        trim_cmd.extend(["-ss", str(start_time)])
+                    trim_cmd.extend(["-i", cached_base])
+                    if end_time:
+                        trim_duration = end_time - (start_time or 0)
+                        trim_cmd.extend(["-t", str(trim_duration)])
+                    trim_cmd.extend(["-c", "copy", sliced_path])
+                    
+                    logger.info(f"Trimming video section {start_time or 0}-{end_time or 'inf'} locally using ffmpeg: {' '.join(trim_cmd)}")
+                    p_trim = await asyncio.create_subprocess_exec(
+                        *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                    )
+                    await p_trim.communicate()
+                    if p_trim.returncode == 0 and os.path.exists(sliced_path):
+                        size = os.path.getsize(sliced_path)
+                        if size > MAX_FILESIZE_BYTES:
+                            os.remove(sliced_path)
+                            return None, base_info, f"📦 Video exceeds {MAX_FILESIZE_MB} MB size limit"
+                        return sliced_path, base_info, None
+
             if not player_client and ("403" in err or "forbidden" in err.lower() or "ffmpeg exited with code" in err.lower() or "requested format is not available" in err.lower()):
                 logger.info(f"Received 403/format/ffmpeg issue downloading video for {video_id}. Retrying with mobile player_client...")
                 return await _download_video(video_id, output_dir, max_height, start_time, end_time, use_cookies=use_cookies, custom_proxy=custom_proxy, player_client="android,ios,web")
@@ -1605,6 +1644,52 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
 
         if proc.returncode != 0:
             err = stderr.decode(errors='replace').strip()
+            if (start_time is not None or end_time is not None) and ("ffmpeg exited with code" in err.lower() or "403" in err or "forbidden" in err.lower()):
+                clean_base = _get_base_video_id(video_id)
+                logger.info(f"Section download failed for {video_id} ({err[:100]}). Falling back to local trim from base audio {clean_base}...")
+                cached_base = _find_cached_file(clean_base, "audio")
+                base_info = None
+                if not cached_base:
+                    base_path, base_info, base_err = await _download_audio(
+                        clean_base, output_dir, duration,
+                        start_time=None, end_time=None,
+                        use_cookies=use_cookies, custom_proxy=custom_proxy,
+                        player_client=player_client or "android,ios,web"
+                    )
+                    if base_path and os.path.exists(base_path):
+                        cached_base = base_path
+                
+                if cached_base and os.path.exists(cached_base):
+                    ext = os.path.splitext(cached_base)[1].lower()
+                    sliced_path = os.path.join(output_dir, f"{safe_id}{ext}")
+                    trim_cmd = ["ffmpeg", "-y", "-nostdin"]
+                    if start_time:
+                        trim_cmd.extend(["-ss", str(start_time)])
+                    trim_cmd.extend(["-i", cached_base])
+                    if end_time:
+                        trim_duration = end_time - (start_time or 0)
+                        trim_cmd.extend(["-t", str(trim_duration)])
+                    trim_cmd.extend(["-c", "copy", sliced_path])
+                    
+                    logger.info(f"Trimming section {start_time or 0}-{end_time or 'inf'} locally using ffmpeg: {' '.join(trim_cmd)}")
+                    p_trim = await asyncio.create_subprocess_exec(
+                        *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                    )
+                    await p_trim.communicate()
+                    if p_trim.returncode == 0 and os.path.exists(sliced_path):
+                        tag_info = dict(base_info or {})
+                        chapters = _get_video_chapters(tag_info)
+                        ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
+                        if chapter:
+                            tag_info["title"] = chapter["title"]
+                            tag_info["track"] = chapter["title"]
+                            tag_info["album"] = tag_info.get("album") or tag_info.get("title") or "Singles"
+                            tag_info["artist"] = tag_info.get("artist") or tag_info.get("uploader") or tag_info.get("channel") or tag_info.get("creator") or "Unknown Artist"
+                            tag_info["track_number"] = ch_idx + 1
+                            tag_info["total_tracks"] = len(chapters)
+                        _tag_audio_file(sliced_path, tag_info, webpage_url=_make_yt_url(clean_base))
+                        return sliced_path, tag_info, None
+
             if not player_client and ("403" in err or "forbidden" in err.lower() or "ffmpeg exited with code" in err.lower() or "requested format is not available" in err.lower()):
                 logger.info(f"Received 403/format/ffmpeg issue downloading audio for {video_id}. Retrying with mobile player_client...")
                 return await _download_audio(video_id, output_dir, duration, start_time=start_time, end_time=end_time, use_cookies=use_cookies, custom_proxy=custom_proxy, player_client="android,ios,web")
