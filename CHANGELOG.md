@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.46] - 2026-08-25
+
+### Fixed
+- **Video Section Slicing with Progressive Streams:**
+  - Prioritized format `18` (360p progressive MP4) and `android,web` player client when downloading video sections (`--download-sections`), preventing FFmpeg 403 HTTP Range rejection errors on adaptive separate streams.
+
 ## [1.6.45] - 2026-08-25
 
 ### Fixed

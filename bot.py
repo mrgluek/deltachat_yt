@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.45"
+VERSION = "1.6.46"
 
 dc_cli = BotCli("ytbot")
 
@@ -1074,10 +1074,15 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
     safe_id = _get_cache_id(video_id)
     out_template = os.path.join(output_dir, f"{safe_id}.%(ext)s")
     
+    if start_time is not None or end_time is not None:
+        video_format = f"18/b[height<={max_height}]/bv[height<={max_height}]+ba/b/best"
+    else:
+        video_format = f"bv[height<={max_height}]+ba/b[height<={max_height}]/bv*+ba/b/best"
+
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "-f", f"bv[height<={max_height}]+ba/b[height<={max_height}]/bv*+ba/b/best",
+        "-f", video_format,
     ]
     if not start_time and not end_time:
         cmd.extend([
@@ -1104,7 +1109,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
     ])
     effective_player_client = player_client
     if not effective_player_client and (start_time is not None or end_time is not None):
-        effective_player_client = "android,ios,web"
+        effective_player_client = "android,web"
 
     if effective_player_client:
         cmd.extend(["--extractor-args", f"youtube:player_client={effective_player_client}"])
