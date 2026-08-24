@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.45] - 2026-08-25
+
+### Fixed
+- **Accurate Audio Seeking in FFmpeg:**
+  - Shifted `-ss` seek position parameter after `-i` input flag in both stream-copy and transcoding commands to avoid container demuxer timestamp errors across different FFmpeg distributions.
+
 ## [1.6.44] - 2026-08-25
 
 ### Fixed

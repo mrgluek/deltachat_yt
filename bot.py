@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.44"
+VERSION = "1.6.45"
 
 dc_cli = BotCli("ytbot")
 
@@ -1717,10 +1717,9 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         if cached_base and os.path.exists(cached_base):
             ext = os.path.splitext(cached_base)[1].lower()
             sliced_path = os.path.join(output_dir, f"{safe_id}{ext}")
-            trim_cmd = ["ffmpeg", "-y", "-nostdin"]
+            trim_cmd = ["ffmpeg", "-y", "-nostdin", "-i", cached_base]
             if start_time is not None:
                 trim_cmd.extend(["-ss", str(start_time)])
-            trim_cmd.extend(["-i", cached_base])
             if end_time is not None:
                 trim_duration = end_time - (start_time or 0)
                 trim_cmd.extend(["-t", str(trim_duration)])
@@ -1735,10 +1734,9 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 # Fallback to audio transcode if stream copy fails
                 logger.info(f"Stream copy trimming failed for {video_id}, retrying with audio transcode...")
                 codec = "libopus" if ext == ".opus" else ("aac" if ext == ".m4a" else "copy")
-                fb_cmd = ["ffmpeg", "-y", "-nostdin"]
+                fb_cmd = ["ffmpeg", "-y", "-nostdin", "-i", cached_base]
                 if start_time is not None:
                     fb_cmd.extend(["-ss", str(start_time)])
-                fb_cmd.extend(["-i", cached_base])
                 if end_time is not None:
                     trim_duration = end_time - (start_time or 0)
                     fb_cmd.extend(["-t", str(trim_duration)])
