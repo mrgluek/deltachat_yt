@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.44] - 2026-08-25
+
+### Fixed
+- **FFmpeg Trimming on Chapterless Files:**
+  - Removed obsolete `-map_chapters -1` flag which caused FFmpeg 7.1+ to fail with exit code 234 (`EINVAL`) when slicing files without embedded chapter tracks.
+  - Simplified and cleaned error logging to prevent raw multi-line FFmpeg build banners in chat and logs.
+
 ## [1.6.43] - 2026-08-25
 
 ### Fixed

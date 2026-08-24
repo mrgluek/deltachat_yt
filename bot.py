@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.43"
+VERSION = "1.6.44"
 
 dc_cli = BotCli("ytbot")
 
@@ -945,6 +945,33 @@ def _clean_error(err: str) -> str:
         return "This video is not available in the bot's country/region."
     return err
 
+
+def _clean_ffmpeg_error(stderr_bytes_or_str: bytes | str) -> str:
+    """Extract the meaningful error message from ffmpeg stderr output, ignoring header banners."""
+    if isinstance(stderr_bytes_or_str, bytes):
+        text = stderr_bytes_or_str.decode('utf-8', errors='replace')
+    else:
+        text = str(stderr_bytes_or_str or '')
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    meaningful = [
+        line for line in lines
+        if not line.startswith("ffmpeg version")
+        and not line.startswith("built with")
+        and not line.startswith("configuration:")
+        and not line.startswith("libav")
+        and not line.startswith("libsw")
+        and not line.startswith("Input #")
+        and not line.startswith("Output #")
+        and not line.startswith("Stream mapping:")
+        and not line.startswith("Press [q]")
+        and not line.startswith("size=")
+        and not line.startswith("frame=")
+        and not line.startswith("[out#")
+    ]
+    if meaningful:
+        return " | ".join(meaningful[-2:])
+    return text[-120:].strip() if text else "Unknown ffmpeg error"
+
 async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_proxy: str = None, player_client: str = None) -> tuple[dict | None, str | None]:
     """Fetch video metadata without downloading. Returns (info, error_msg)."""
     url = _make_yt_url(video_id)
@@ -1130,7 +1157,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
                     if end_time is not None:
                         trim_duration = end_time - (start_time or 0)
                         trim_cmd.extend(["-t", str(trim_duration)])
-                    trim_cmd.extend(["-c", "copy", "-map_chapters", "-1", sliced_path])
+                    trim_cmd.extend(["-c", "copy", sliced_path])
                     
                     logger.info(f"Trimming video section {start_time or 0}-{end_time or 'inf'} locally using ffmpeg: {' '.join(trim_cmd)}")
                     p_trim = await asyncio.create_subprocess_exec(
@@ -1697,18 +1724,16 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
             if end_time is not None:
                 trim_duration = end_time - (start_time or 0)
                 trim_cmd.extend(["-t", str(trim_duration)])
-            trim_cmd.extend(["-c", "copy", "-map_chapters", "-1", sliced_path])
+            trim_cmd.extend(["-c", "copy", sliced_path])
             
             logger.info(f"Slicing audio for {video_id} locally using ffmpeg: {' '.join(trim_cmd)}")
             p_trim = await asyncio.create_subprocess_exec(
                 *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             _, trim_err = await p_trim.communicate()
-            fb_err = b""
             if p_trim.returncode != 0 or not os.path.exists(sliced_path) or os.path.getsize(sliced_path) == 0:
                 # Fallback to audio transcode if stream copy fails
-                trim_err_text = trim_err.decode(errors='replace').strip() if trim_err else ""
-                logger.info(f"Stream copy trimming failed for {video_id} (exit={p_trim.returncode}, err={trim_err_text[:200]}), retrying with audio transcode...")
+                logger.info(f"Stream copy trimming failed for {video_id}, retrying with audio transcode...")
                 codec = "libopus" if ext == ".opus" else ("aac" if ext == ".m4a" else "copy")
                 fb_cmd = ["ffmpeg", "-y", "-nostdin"]
                 if start_time is not None:
@@ -1717,11 +1742,11 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 if end_time is not None:
                     trim_duration = end_time - (start_time or 0)
                     fb_cmd.extend(["-t", str(trim_duration)])
-                fb_cmd.extend(["-c:a", codec, "-b:a", "128k", "-map_chapters", "-1", sliced_path])
+                fb_cmd.extend(["-c:a", codec, "-b:a", "128k", sliced_path])
                 p_fb = await asyncio.create_subprocess_exec(
                     *fb_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
                 )
-                _, fb_err = await p_fb.communicate()
+                await p_fb.communicate()
 
             if os.path.exists(sliced_path) and os.path.getsize(sliced_path) > 0:
                 tag_info = dict(base_info or {})
@@ -1770,14 +1795,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 _tag_audio_file(sliced_path, tag_info, webpage_url=_make_yt_url(clean_base))
                 return sliced_path, tag_info, None
             else:
-                err_text = (fb_err or trim_err or b"").decode(errors='replace').strip()
-                logger.warning(f"ffmpeg slicing failed for {video_id} on base {cached_base}: {err_text[:200]}")
-                try:
-                    os.remove(cached_base)
-                    logger.info(f"Purged corrupt or unsliceable cached base: {cached_base}")
-                except Exception:
-                    pass
-                return None, None, f"❌ Failed to trim audio track from base file: {err_text[:100]}"
+                logger.warning(f"ffmpeg slicing failed for {video_id} on base {cached_base}")
+                return None, None, "❌ Failed to trim audio track from base file"
         else:
             return None, None, base_err or "❌ Base audio not available for trimming track"
 
