@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.39] - 2026-08-25
+
+### Fixed
+- **Chapter Track Slicing & Chapter Strip (`-map_chapters -1`):**
+  - Fixed `start_time = 0` evaluation check in ffmpeg trim commands (`if start_time is not None:`) so track 1 is properly trimmed from 0 seconds instead of skipping the `-ss` argument.
+  - Added `-map_chapters -1` to ffmpeg audio and video trimming commands so sliced tracks do not retain the 20+ chapter markers of the entire mix.
+  - Added automatic audio transcoding fallback (`-c:a libopus / aac`) if stream copy trimming encounters codec container mismatches.
+  - Prevented fallthrough to downloading the full 1-hour audio mix when section slicing is requested.
+
 ## [1.6.38] - 2026-08-21
 
 ### Fixed
