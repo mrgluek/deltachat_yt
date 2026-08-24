@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.41] - 2026-08-25
+
+### Added
+- **Tracklist Extraction from YouTube Comments & Linked Comments (`lc=`):**
+  - Added automatic tracklist parsing from pinned, top, and linked YouTube comments (`_extract_chapters_from_comments`) when a video lacks embedded chapters or description timestamps.
+  - Preserved `lc=` (linked comment) query parameter in YouTube URLs so linked comment tracklists are automatically detected, parsed, and converted into sliced track buttons (`/ytms_...`, `/ytm_...`, `/yt_...`).
+
 ## [1.6.40] - 2026-08-25
 
 ### Fixed

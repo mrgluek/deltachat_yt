@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.40"
+VERSION = "1.6.41"
 
 dc_cli = BotCli("ytbot")
 
@@ -295,8 +295,66 @@ def _extract_chapters_from_description(desc: str, total_duration: int = 0) -> li
     return result
 
 
-def _get_video_chapters(info: dict | None) -> list[dict]:
-    """Extract and normalize list of chapters from yt-dlp info dictionary."""
+def _extract_chapters_from_comments(video_url_or_id: str, total_duration: int = 0) -> list[dict]:
+    """Fetch top/pinned/linked YouTube comments and extract tracklist chapters if present."""
+    if not video_url_or_id:
+        return []
+    video_url = _make_yt_url(video_url_or_id) if not (video_url_or_id.startswith("http://") or video_url_or_id.startswith("https://")) else video_url_or_id
+    if not ("youtube.com" in video_url or "youtu.be" in video_url):
+        return []
+
+    try:
+        req = urllib.request.Request(video_url, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Cookie": "SOCS=CAISEwgDEgk1Njk1NzU0MDQaAmVuIAEaBgiAk67UBg"
+        })
+        with urllib.request.urlopen(req, timeout=10) as response:
+            html = response.read().decode("utf-8", errors="replace")
+
+        api_key_m = re.search(r"\"INNERTUBE_API_KEY\"\s*:\s*\"([^\"]+)\"", html)
+        if not api_key_m:
+            return []
+        api_key = api_key_m.group(1)
+        tokens = re.findall(r"\"token\"\s*:\s*\"([^\"]+)\"", html)
+
+        for t in tokens[:6]:
+            post_data = {
+                "context": {"client": {"clientName": "WEB", "clientVersion": "2.20240101.01.00", "hl": "en", "gl": "US"}},
+                "continuation": t
+            }
+            next_url = f"https://www.youtube.com/youtubei/v1/next?key={api_key}"
+            req2 = urllib.request.Request(
+                next_url,
+                data=json.dumps(post_data).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Cookie": "SOCS=CAISEwgDEgk1Njk1NzU0MDQaAmVuIAEaBgiAk67UBg"}
+            )
+            try:
+                with urllib.request.urlopen(req2, timeout=10) as resp2:
+                    res = resp2.read().decode("utf-8", errors="replace")
+                
+                if "00:00" in res or "0:00" in res:
+                    comment_texts = []
+                    for c_match in re.finditer(r"\"content\":\s*\"([^\"]+)\"", res):
+                        c_text = _unescape_json_string(c_match.group(1))
+                        if "00:00" in c_text or "0:00" in c_text:
+                            comment_texts.append(c_text)
+
+                    for text in comment_texts:
+                        chapters = _extract_chapters_from_description(text, total_duration)
+                        if chapters and len(chapters) >= 2:
+                            logger.info(f"Extracted {len(chapters)} tracklist chapters from YouTube comments for {video_url}")
+                            return chapters
+            except Exception as e:
+                logger.debug(f"Error checking comment token: {e}")
+    except Exception as e:
+        logger.debug(f"Could not extract chapters from YouTube comments for {video_url}: {e}")
+
+    return []
+
+
+def _get_video_chapters(info: dict | None, video_url: str = None) -> list[dict]:
+    """Extract and normalize list of chapters from yt-dlp info dictionary or YouTube comments."""
     if not info:
         return []
     raw_chapters = info.get("chapters")
@@ -322,7 +380,19 @@ def _get_video_chapters(info: dict | None) -> list[dict]:
             chapters.sort(key=lambda x: x["start_time"])
             return chapters
 
-    return _extract_chapters_from_description(info.get("description", "") or "", total_dur)
+    desc_chapters = _extract_chapters_from_description(info.get("description", "") or "", total_dur)
+    if desc_chapters and len(desc_chapters) >= 2:
+        return desc_chapters
+
+    # Try extracting tracklist from pinned/top/linked YouTube comments
+    target_url = video_url or info.get("webpage_url") or info.get("original_url") or info.get("id")
+    if target_url:
+        comment_chapters = _extract_chapters_from_comments(target_url, total_dur)
+        if comment_chapters and len(comment_chapters) >= 2:
+            info["chapters"] = comment_chapters
+            return comment_chapters
+
+    return []
 
 
 def _find_chapter(chapters: list[dict], start_time: int | None, end_time: int | None) -> tuple[int | None, dict | None]:
@@ -551,7 +621,7 @@ def _extract_video_id(text: str) -> str | None:
     # 3. YouTube URL -> 11-char ID (unless it has a time parameter)
     m_yt = YT_URL_RE.search(text)
     if m_yt:
-        if 't=' in text or 'start=' in text or 'end=' in text:
+        if 't=' in text or 'start=' in text or 'end=' in text or 'lc=' in text:
             m_any_url = re.search(r'https?://[^\s]+', text)
             if m_any_url:
                 return m_any_url.group(0)

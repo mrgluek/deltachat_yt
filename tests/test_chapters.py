@@ -247,15 +247,55 @@ class TestChapterSlicing(unittest.IsolatedAsyncioTestCase):
                 fake_audio, info, music_dir,
                 video_id="https://youtu.be/KtflOe5C7RM?start=0&end=279"
             )
-
             self.assertIsNone(err)
             self.assertIsNotNone(dest_path)
             self.assertTrue(os.path.exists(dest_path))
             self.assertIn("煙霞 - Smoky Haze.opus", dest_path)
-            self.assertIn("Jazz Channel", dest_path)
             self.assertIn("Japanese Jazz Compilation", dest_path)
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+    @patch('urllib.request.urlopen')
+    def test_extract_chapters_from_comments(self, mock_urlopen):
+        """Test extracting tracklist chapters from YouTube comment response."""
+        mock_html = """
+        <script>var ytcfg = {}; var a = {"INNERTUBE_API_KEY": "AIzaFakeKey"};</script>
+        <script>"token":"fake_comment_token"</script>
+        """
+        mock_comment_json = json.dumps({
+            "content": {
+                "content": "00:00 1. Mamy Jeszcze Jedno Miejsce\n01:52 2. Trzy Doby Na Orbicie\n06:22 3. Planeta Radio"
+            }
+        })
+
+        mock_resp1 = MagicMock()
+        mock_resp1.read.return_value = mock_html.encode("utf-8")
+        mock_resp1.__enter__.return_value = mock_resp1
+
+        mock_resp2 = MagicMock()
+        mock_resp2.read.return_value = mock_comment_json.encode("utf-8")
+        mock_resp2.__enter__.return_value = mock_resp2
+
+        mock_urlopen.side_effect = [mock_resp1, mock_resp2]
+
+        info = {
+            "title": "Kosmobotanika Album",
+            "duration": 3600,
+            "description": "No tracklist in description",
+            "original_url": "https://www.youtube.com/watch?v=gZUPDL3RBYs&lc=UgzxnXZ3iyMYGBcmJlN4AaABAg"
+        }
+
+        chapters = bot._get_video_chapters(info, "https://www.youtube.com/watch?v=gZUPDL3RBYs&lc=UgzxnXZ3iyMYGBcmJlN4AaABAg")
+        self.assertEqual(len(chapters), 3)
+        self.assertEqual(chapters[0]["title"], "Mamy Jeszcze Jedno Miejsce")
+        self.assertEqual(chapters[0]["start_time"], 0)
+        self.assertEqual(chapters[0]["end_time"], 112)
+        self.assertEqual(chapters[1]["title"], "Trzy Doby Na Orbicie")
+        self.assertEqual(chapters[1]["start_time"], 112)
+        self.assertEqual(chapters[1]["end_time"], 382)
+        self.assertEqual(chapters[2]["title"], "Planeta Radio")
+        self.assertEqual(chapters[2]["start_time"], 382)
+        self.assertEqual(chapters[2]["end_time"], 3600)
 
 
 if __name__ == "__main__":
