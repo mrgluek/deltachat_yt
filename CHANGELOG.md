@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.42] - 2026-08-25
+
+### Fixed
+- **0 KB Corrupt Cache Auto-Purge and Validation:**
+  - Added strict non-empty (`size > 0`) checks across cache finders (`_find_cached_file`), audio download collectors (`_find_file_in_dir`), and Navidrome saver (`_save_to_navidrome`).
+  - Corrupt or 0-byte cached files on disk are automatically deleted and bypassed so tracks are re-sliced cleanly from valid sources instead of serving empty files.
+
 ## [1.6.41] - 2026-08-25
 
 ### Added

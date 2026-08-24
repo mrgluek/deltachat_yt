@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.41"
+VERSION = "1.6.42"
 
 dc_cli = BotCli("ytbot")
 
@@ -834,17 +834,29 @@ def _get_cache_id(video_id: str) -> str:
     return video_id
 
 def _find_cached_file(video_id: str, download_type: str) -> str | None:
-    """Find the cached file path if it exists, checking for different extensions."""
+    """Find the cached file path if it exists, checking for different extensions and non-empty size."""
     cache_id = _get_cache_id(video_id)
     if download_type == "video":
         path = os.path.join(CACHE_DIR, f"{cache_id}.mp4")
         if os.path.exists(path):
-            return path
+            if os.path.getsize(path) > 0:
+                return path
+            else:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
     else:
         for ext in [".opus", ".m4a", ".mp3", ".ogg"]:
             path = os.path.join(CACHE_DIR, f"{cache_id}{ext}")
             if os.path.exists(path):
-                return path
+                if os.path.getsize(path) > 0:
+                    return path
+                else:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
     return None
 
 
@@ -857,7 +869,7 @@ def _find_file_in_dir(directory: str, extensions: list[str] = None, prefix: str 
     candidates = []
     for f in os.listdir(directory):
         fpath = os.path.join(directory, f)
-        if not os.path.isfile(fpath):
+        if not os.path.isfile(fpath) or os.path.getsize(fpath) == 0:
             continue
         
         # Exclude known incomplete download extensions
@@ -1709,7 +1721,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 )
                 await p_fb.communicate()
 
-            if os.path.exists(sliced_path):
+            if os.path.exists(sliced_path) and os.path.getsize(sliced_path) > 0:
                 tag_info = dict(base_info or {})
                 if not tag_info:
                     cached_meta = database.get_cached_info(clean_base)
@@ -1918,7 +1930,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
             if not filepath:
                 filepath = _find_file_in_dir(output_dir, ['.opus', '.mp3', '.m4a', '.webm'], prefix=safe_id)
 
-        if filepath and os.path.exists(filepath):
+        if filepath and os.path.exists(filepath) and os.path.getsize(filepath) > 0:
             # Process and embed lyrics into audio file & generate standardized .lrc
             _process_subtitles_and_lyrics(output_dir, safe_id, filepath)
 
@@ -2344,6 +2356,8 @@ def _save_to_navidrome(filepath: str, info: dict, music_dir: str, video_id: str 
     Returns (destination_audio_path, destination_lrc_path, error_message).
     """
     try:
+        if not filepath or not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+            return None, None, f"Source file {filepath} is missing or empty"
         chapters = _get_video_chapters(info)
         full_url = _extract_video_id(video_id) if video_id else ""
         start_time, end_time = _parse_time_param(full_url) if full_url else (None, None)
