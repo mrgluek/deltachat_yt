@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.48"
+VERSION = "1.6.49"
 
 dc_cli = BotCli("ytbot")
 
@@ -3589,16 +3589,40 @@ def on_new_message(bot, accid, event):
         logger.error(f"Greeting check error: {e}")
 
 
+def _download_thumbnail(thumbnail_url: str, safe_id: str) -> str | None:
+    """Download thumbnail image with proper User-Agent and save to THUMB_CACHE_DIR."""
+    if not thumbnail_url or not (thumbnail_url.startswith("http://") or thumbnail_url.startswith("https://")):
+        return None
+    try:
+        os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
+        persist_thumb = os.path.join(THUMB_CACHE_DIR, f"{safe_id}.jpg")
+        req = urllib.request.Request(thumbnail_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = r.read()
+        if data:
+            with open(persist_thumb, 'wb') as f:
+                f.write(data)
+            return persist_thumb
+    except Exception as e:
+        logger.error(f"Failed to download thumbnail from {thumbnail_url}: {e}")
+    return None
+
+
 def _handle_link_info(bot, accid, msg, video_id: str):
     """Fetch video info and reply with download commands (with caching)."""
+    safe_id = _get_cache_id(video_id)
     # 1. Check Cache
     cached = database.get_cached_info(video_id)
     if cached:
         info_json, cached_thumb = cached
         try:
             info = json.loads(info_json)
-            # Check if thumb still exists
+            # Check if thumb still exists, or re-download if missing
             thumb_path = cached_thumb if cached_thumb and os.path.exists(cached_thumb) else None
+            if not thumb_path and info.get("thumbnail"):
+                thumb_path = _download_thumbnail(info["thumbnail"], safe_id)
+                if thumb_path:
+                    database.set_cached_info(video_id, info_json, thumb_path)
             _display_link_info(bot, accid, msg, video_id, info, thumb_path)
             return
         except Exception as e:
@@ -3618,16 +3642,7 @@ def _handle_link_info(bot, accid, msg, video_id: str):
         return
 
     # 3. Handle thumbnail (persist it)
-    thumb_path = None
-    thumbnail_url = info.get("thumbnail")
-    if thumbnail_url:
-        try:
-            safe_id = _get_cache_id(video_id)
-            persist_thumb = os.path.join(THUMB_CACHE_DIR, f"{safe_id}.jpg")
-            urllib.request.urlretrieve(thumbnail_url, persist_thumb)
-            thumb_path = persist_thumb
-        except Exception as e:
-            logger.error(f"Failed to download thumbnail: {e}")
+    thumb_path = _download_thumbnail(info.get("thumbnail"), safe_id)
 
     # 4. Save to Cache
     try:

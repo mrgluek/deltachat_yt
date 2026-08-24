@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.49] - 2026-08-25
+
+### Fixed
+- **Reliable Thumbnail Downloading and Caching:**
+  - Added `_download_thumbnail` with proper browser `User-Agent` and automatic directory creation (`data/thumbnails/`).
+  - Added automatic re-fetching of missing thumbnail images when serving cached video metadata.
+
 ## [1.6.48] - 2026-08-25
 
 ### Fixed
