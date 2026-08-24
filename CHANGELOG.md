@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.40] - 2026-08-25
+
+### Fixed
+- **Base Audio Slicing Cache Retention:**
+  - Removed 50 MB file size limit deletion when downloading base mix audio for slicing (`for_slicing=True`).
+  - Fixes loop where long DJ mixes (>50 MB) were downloaded, tagged, and then deleted by the email attachment size checker before slicing could occur.
+
 ## [1.6.39] - 2026-08-25
 
 ### Fixed

@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.39"
+VERSION = "1.6.40"
 
 dc_cli = BotCli("ytbot")
 
@@ -1866,10 +1866,11 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
 
             # Ensure comprehensive tags and cover art are embedded
             _tag_audio_file(filepath, tag_info, webpage_url=_make_yt_url(video_id))
-            size = os.path.getsize(filepath)
-            if size > MAX_FILESIZE_BYTES:
-                os.remove(filepath)
-                return None, info, f"📦 Audio file exceeds {MAX_FILESIZE_MB} MB"
+            if not for_slicing:
+                size = os.path.getsize(filepath)
+                if size > MAX_FILESIZE_BYTES:
+                    os.remove(filepath)
+                    return None, info, f"📦 Audio file exceeds {MAX_FILESIZE_MB} MB"
             return filepath, info, None
         
         # Check if there is a partial file indicating a size limit abort
