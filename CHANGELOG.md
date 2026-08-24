@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.47] - 2026-08-25
+
+### Fixed
+- **Purge Corrupt Base File on Trimming Failure:**
+  - Re-introduced auto-deletion of corrupt `cached_base` on trimming failure so that fallback configurations can re-download a fresh clean base audio stream instead of retrying against broken cache.
+
 ## [1.6.46] - 2026-08-25
 
 ### Fixed

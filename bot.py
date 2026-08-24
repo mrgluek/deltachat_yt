@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.46"
+VERSION = "1.6.47"
 
 dc_cli = BotCli("ytbot")
 
@@ -1722,9 +1722,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         if cached_base and os.path.exists(cached_base):
             ext = os.path.splitext(cached_base)[1].lower()
             sliced_path = os.path.join(output_dir, f"{safe_id}{ext}")
-            trim_cmd = ["ffmpeg", "-y", "-nostdin", "-i", cached_base]
-            if start_time is not None:
-                trim_cmd.extend(["-ss", str(start_time)])
+            trim_cmd = ["ffmpeg", "-y", "-nostdin", "-ss", str(start_time or 0), "-i", cached_base]
             if end_time is not None:
                 trim_duration = end_time - (start_time or 0)
                 trim_cmd.extend(["-t", str(trim_duration)])
@@ -1735,13 +1733,12 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             _, trim_err = await p_trim.communicate()
+            fb_err = b""
             if p_trim.returncode != 0 or not os.path.exists(sliced_path) or os.path.getsize(sliced_path) == 0:
                 # Fallback to audio transcode if stream copy fails
                 logger.info(f"Stream copy trimming failed for {video_id}, retrying with audio transcode...")
                 codec = "libopus" if ext == ".opus" else ("aac" if ext == ".m4a" else "copy")
-                fb_cmd = ["ffmpeg", "-y", "-nostdin", "-i", cached_base]
-                if start_time is not None:
-                    fb_cmd.extend(["-ss", str(start_time)])
+                fb_cmd = ["ffmpeg", "-y", "-nostdin", "-ss", str(start_time or 0), "-i", cached_base]
                 if end_time is not None:
                     trim_duration = end_time - (start_time or 0)
                     fb_cmd.extend(["-t", str(trim_duration)])
@@ -1749,7 +1746,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 p_fb = await asyncio.create_subprocess_exec(
                     *fb_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
                 )
-                await p_fb.communicate()
+                _, fb_err = await p_fb.communicate()
 
             if os.path.exists(sliced_path) and os.path.getsize(sliced_path) > 0:
                 tag_info = dict(base_info or {})
@@ -1798,7 +1795,13 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 _tag_audio_file(sliced_path, tag_info, webpage_url=_make_yt_url(clean_base))
                 return sliced_path, tag_info, None
             else:
-                logger.warning(f"ffmpeg slicing failed for {video_id} on base {cached_base}")
+                err_msg = _clean_ffmpeg_error(fb_err or trim_err)
+                logger.warning(f"ffmpeg slicing failed for {video_id} on base {cached_base}: {err_msg}")
+                try:
+                    os.remove(cached_base)
+                    logger.info(f"Purged unsliceable cached base: {cached_base}")
+                except Exception:
+                    pass
                 return None, None, "❌ Failed to trim audio track from base file"
         else:
             return None, None, base_err or "❌ Base audio not available for trimming track"
