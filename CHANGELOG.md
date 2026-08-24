@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.43] - 2026-08-25
+
+### Fixed
+- **Purge Corrupt Cached Base Audio on Slicing Failure:**
+  - Added auto-deletion of base audio files in `data/cache/` when ffmpeg fails to slice/transcode from them.
+  - Enhanced error logging with ffmpeg stderr outputs to easily diagnose slicing issues and ensure fallback configurations re-download fresh uncorrupted base streams.
+
 ## [1.6.42] - 2026-08-25
 
 ### Fixed
