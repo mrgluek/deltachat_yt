@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.48] - 2026-08-25
+
+### Fixed
+- **Preserve Pristine Base Audio Container for Slicing:**
+  - Avoided Mutagen metadata and lyrics tagging on the raw base audio file when downloading for slicing (`for_slicing=True`). Mutagen atom rewrites on YouTube raw M4A containers corrupt chunk offsets (`stco`/`co64`), causing FFmpeg transcode and stream-copy failures (`Conversion failed!`).
+
 ## [1.6.47] - 2026-08-25
 
 ### Fixed

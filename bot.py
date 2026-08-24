@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.47"
+VERSION = "1.6.48"
 
 dc_cli = BotCli("ytbot")
 
@@ -1569,10 +1569,10 @@ def _tag_audio_file(filepath: str, info: dict, webpage_url: str = None):
         logger.warning(f"Error tagging audio file {filepath}: {e}")
 
 
-def _process_subtitles_and_lyrics(output_dir: str, safe_id: str, audio_path: str) -> tuple[str | None, str | None]:
+def _process_subtitles_and_lyrics(output_dir: str, safe_id: str, audio_path: str, embed_lyrics: bool = True) -> tuple[str | None, str | None]:
     """
     Discovers downloaded subtitles in output_dir, converts to standardized .lrc,
-    and embeds clean lyrics text into audio_path.
+    and optionally embeds clean lyrics text into audio_path.
     Returns (lrc_filepath, clean_lyrics_text).
     """
     sub_files = []
@@ -1602,7 +1602,7 @@ def _process_subtitles_and_lyrics(output_dir: str, safe_id: str, audio_path: str
             with open(lrc_path, 'w', encoding='utf-8') as f:
                 f.write(lrc_content)
                 
-        if clean_lyrics and audio_path and os.path.exists(audio_path):
+        if embed_lyrics and clean_lyrics and audio_path and os.path.exists(audio_path):
             _embed_lyrics_in_audio(audio_path, clean_lyrics)
             
         return lrc_path if os.path.exists(lrc_path) else chosen_sub, clean_lyrics
@@ -1965,28 +1965,32 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
                 filepath = _find_file_in_dir(output_dir, ['.opus', '.mp3', '.m4a', '.webm'], prefix=safe_id)
 
         if filepath and os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-            # Process and embed lyrics into audio file & generate standardized .lrc
-            _process_subtitles_and_lyrics(output_dir, safe_id, filepath)
-
-            # Resolve chapter if start_time / end_time is specified
-            chapters = _get_video_chapters(info)
-            ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
-            tag_info = dict(info)
-            if chapter:
-                tag_info["title"] = chapter["title"]
-                tag_info["track"] = chapter["title"]
-                tag_info["album"] = info.get("album") or info.get("title") or "Singles"
-                tag_info["artist"] = info.get("artist") or info.get("uploader") or info.get("channel") or info.get("creator") or "Unknown Artist"
-                tag_info["track_number"] = ch_idx + 1
-                tag_info["total_tracks"] = len(chapters)
-
-            # Ensure comprehensive tags and cover art are embedded
-            _tag_audio_file(filepath, tag_info, webpage_url=_make_yt_url(video_id))
             if not for_slicing:
+                # Process and embed lyrics into audio file & generate standardized .lrc
+                _process_subtitles_and_lyrics(output_dir, safe_id, filepath, embed_lyrics=True)
+
+                # Resolve chapter if start_time / end_time is specified
+                chapters = _get_video_chapters(info)
+                ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
+                tag_info = dict(info)
+                if chapter:
+                    tag_info["title"] = chapter["title"]
+                    tag_info["track"] = chapter["title"]
+                    tag_info["album"] = info.get("album") or info.get("title") or "Singles"
+                    tag_info["artist"] = info.get("artist") or info.get("uploader") or info.get("channel") or info.get("creator") or "Unknown Artist"
+                    tag_info["track_number"] = ch_idx + 1
+                    tag_info["total_tracks"] = len(chapters)
+
+                # Ensure comprehensive tags and cover art are embedded
+                _tag_audio_file(filepath, tag_info, webpage_url=_make_yt_url(video_id))
                 size = os.path.getsize(filepath)
                 if size > MAX_FILESIZE_BYTES:
                     os.remove(filepath)
                     return None, info, f"📦 Audio file exceeds {MAX_FILESIZE_MB} MB"
+            else:
+                # For slicing, only extract the companion .lrc file without modifying the base audio container with Mutagen
+                _process_subtitles_and_lyrics(output_dir, safe_id, filepath, embed_lyrics=False)
+
             return filepath, info, None
         
         # Check if there is a partial file indicating a size limit abort
