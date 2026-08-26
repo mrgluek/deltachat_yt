@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.49"
+VERSION = "1.6.50"
 
 dc_cli = BotCli("ytbot")
 
@@ -1217,36 +1217,6 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
                     search_prefix = m.group(1) if m else None
                 filepath = _find_file_in_dir(output_dir, ['.mp4', '.mkv', '.webm'], prefix=search_prefix)
         if filepath and os.path.exists(filepath):
-            if start_time or end_time:
-                trimmed_filepath = os.path.splitext(filepath)[0] + "_trimmed.mp4"
-                trim_duration = (end_time - (start_time or 0)) if end_time else None
-                trim_cmd = [
-                    "ffmpeg", "-y", "-nostdin"
-                ]
-                if start_time:
-                    trim_cmd.extend(["-ss", str(start_time)])
-                trim_cmd.extend(["-i", filepath])
-                if trim_duration is not None:
-                    trim_cmd.extend(["-t", str(trim_duration)])
-                trim_cmd.extend([
-                    "-c", "copy",
-                    trimmed_filepath
-                ])
-                try:
-                    logger.info(f"Trimming video starting from {start_time or 0}s (duration: {trim_duration or 'inf'}s) locally using ffmpeg...")
-                    proc_trim = await asyncio.create_subprocess_exec(
-                        *trim_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                        stdin=asyncio.subprocess.DEVNULL
-                    )
-                    await proc_trim.communicate()
-                    if proc_trim.returncode == 0 and os.path.exists(trimmed_filepath):
-                        os.remove(filepath)
-                        filepath = trimmed_filepath
-                    else:
-                        logger.error(f"ffmpeg video trim failed with code {proc_trim.returncode}")
-                except Exception as e:
-                    logger.error(f"Error during local ffmpeg video trim: {e}")
-
             size = os.path.getsize(filepath)
             if size > MAX_FILESIZE_BYTES:
                 os.remove(filepath)

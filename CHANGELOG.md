@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.50] - 2026-08-26
+
+### Fixed
+- **Prevent Double Trimming of Video Sections:**
+  - Removed redundant local `ffmpeg` re-trimming on video sections downloaded via `yt-dlp --download-sections`, which previously caused seeking past EOF on the already-sliced output file and produced empty 175 KB remnant files.
+
 ## [1.6.49] - 2026-08-25
 
 ### Fixed
