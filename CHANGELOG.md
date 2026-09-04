@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.52] - 2026-09-04
+
+### Fixed
+- **Prevent Filter Loop on Videos with Missing Duration:**
+  - Updated `--match-filter` to `duration<=?{MAX_DURATION_VIDEO}` in `_download_video` and `duration<=?{max_filter_dur}` in `_download_audio`. This prevents `yt-dlp` from rejecting Instagram, TikTok, and Twitter videos that lack pre-download duration metadata.
+  - Skip resolution downgrade loops (480p $\to$ 360p $\to$ 240p $\to$ 144p) for non-YouTube services (Instagram, TikTok, Twitter) where videos exist only as single progressive streams.
+  - Immediately abort the fallback configurations loop on filesize or duration errors (`exceeds size limit`, `longer than duration`) instead of retrying across all proxy/cookie configurations.
+  - Fix short ID mapping for URLs when generating the `/ytm_` command on oversized video warnings.
+
 ## [1.6.51] - 2026-09-04
 
 ### Improved

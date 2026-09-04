@@ -57,8 +57,8 @@ class TestInstagramHandling(unittest.TestCase):
                     pass
 
     def test_version_bumped(self):
-        """Test bot.VERSION is 1.6.51."""
-        self.assertEqual(bot.VERSION, "1.6.51")
+        """Test bot.VERSION is 1.6.52."""
+        self.assertEqual(bot.VERSION, "1.6.52")
 
     def test_clean_error_no_video_in_post(self):
         """Test _clean_error formats 'There is no video in this post' nicely."""

@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.51"
+VERSION = "1.6.52"
 
 dc_cli = BotCli("ytbot")
 
@@ -1091,7 +1091,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
     ]
     if not start_time and not end_time:
         cmd.extend([
-            "--match-filter", f"duration<={MAX_DURATION_VIDEO}",
+            "--match-filter", f"duration<=?{MAX_DURATION_VIDEO}",
             "--max-filesize", f"{MAX_FILESIZE_MB}M",
         ])
     else:
@@ -1202,6 +1202,9 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
                 return None, None, f"📦 Video exceeds {MAX_FILESIZE_MB} MB size limit"
             if "duration" in err.lower():
                 return None, None, f"⏱ Video is longer than {MAX_DURATION_VIDEO // 60} minutes"
+            if err:
+                cleaned_err = _clean_error(err)
+                return None, None, f"yt-dlp error: {cleaned_err[:200]}"
             
             return None, None, "⚠️ Video was filtered out (possibly too large or restricted)"
 
@@ -1800,7 +1803,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "--match-filter", f"duration<={max_filter_dur}",
+        "--match-filter", f"duration<=?{max_filter_dur}",
     ]
 
     if format_selector:
@@ -1919,6 +1922,9 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
             logger.warning(f"yt-dlp audio returned no stdout for {video_id}. Stderr: {err}")
             if "duration" in err.lower():
                 return None, None, f"⏱ Audio is longer than {MAX_DURATION_AUDIO // 60} minutes"
+            if err:
+                cleaned_err = _clean_error(err)
+                return None, None, f"yt-dlp error: {cleaned_err[:200]}"
             return None, None, "⚠️ Audio was filtered out or restricted"
 
         info = json.loads(stdout.decode(errors='replace').strip())
@@ -2807,42 +2813,56 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
                     if download_type == "video":
                         initial_height = 360 if effective_duration > 600 else 480
                         heights_to_try = [480, 360, 240, 144] if initial_height == 480 else [360, 240, 144]
+                        is_youtube = (info or {}).get("extractor", "").lower() == "youtube" or bool(YT_URL_RE.search(video_id) or YT_ID_RE.search(video_id))
+                        if not is_youtube:
+                            heights_to_try = [480]
+
                         filepath = None
-                        info = None
+                        info_dl = None
                         error = None
                         for h in heights_to_try:
-                            filepath, info, error = await _download_video(
+                            filepath, info_dl, error = await _download_video(
                                 video_id, tmpdir, max_height=h, 
                                 start_time=start_time, end_time=end_time, 
                                 use_cookies=cfg["use_cookies"], custom_proxy=cfg["proxy"]
                             )
                             if filepath and os.path.exists(filepath):
+                                if info_dl:
+                                    info = info_dl
                                 break
                             
                             is_size_or_format_err = error and any(term in error.lower() for term in [f"{MAX_FILESIZE_MB} mb", "30 mb", "filtered", "not available", "format"])
-                            if is_size_or_format_err:
+                            if is_size_or_format_err and is_youtube:
                                 logger.info(f"Retrying {video_id} with lower resolution than {h}p because of size/format limit ({error})...")
                                 continue
                             else:
                                 break
                         
                         if error and any(term in error.lower() for term in [f"{MAX_FILESIZE_MB} mb", "30 mb", "filtered", "not available", "format"]):
-                            short_id = video_id
-                            if video_id.startswith("http://") or video_id.startswith("https://"):
-                                m = YT_URL_RE.search(video_id)
-                                short_id = m.group(1) if m else video_id
+                            clean_base = _get_base_video_id(video_id)
+                            if clean_base.startswith("http://") or clean_base.startswith("https://"):
+                                short_id = _get_cache_id(clean_base)
+                                database.add_url_mapping(short_id, clean_base)
+                            else:
+                                short_id = clean_base
                             error = f"📦 Video exceeds {MAX_FILESIZE_MB} MB size limit even at lower resolutions. Try audio instead: /ytm_{short_id}"
                     else:
-                        filepath, info, error = await _download_audio(
+                        filepath, info_dl, error = await _download_audio(
                             video_id, tmpdir, duration, 
                             start_time=start_time, end_time=end_time, 
                             use_cookies=cfg["use_cookies"], custom_proxy=cfg["proxy"]
                         )
+                        if filepath and os.path.exists(filepath) and info_dl:
+                            info = info_dl
     
                     if error:
                         last_error = error
                         logger.info(f"Download attempt using {cfg['desc']} failed for {video_id}: {error}.")
                         if "no video in this post" in error.lower() or "there is no video in this post" in error.lower():
+                            _react(bot, accid, req_msg_id, "❌")
+                            _send(bot, accid, chat_id, f"❌ {error}")
+                            return
+                        if "exceeds" in error.lower() or "size limit" in error.lower() or "longer than" in error.lower():
                             _react(bot, accid, req_msg_id, "❌")
                             _send(bot, accid, chat_id, f"❌ {error}")
                             return
