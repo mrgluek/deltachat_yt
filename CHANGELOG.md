@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.53] - 2026-09-04
+
+### Added
+- **Dedicated Russian Services Proxy (`RU_PROXY`):**
+  - Introduced the `RU_PROXY` environment variable for routing requests to Russian platforms (VKontakte, VK Video, Rutube, Yandex, Dzen, Odnoklassniki, Mail.ru, and Russian TV portals) through a dedicated Russian server or proxy.
+  - Automatically routes Russian content through `RU_PROXY` while keeping international services (YouTube, Instagram, etc.) on direct connections or fast proxies with `BACKUP_PROXY` fallback.
+  - Unified proxy resolution via `_get_active_proxy` across info extraction, video downloads, audio downloads, and status checks.
+  - Preserved `YANDEX_PROXY` precedence for Yandex Music while allowing `RU_PROXY` as an automatic fallback if `YANDEX_PROXY` is not defined.
+  - Added `- RU_PROXY=${RU_PROXY:-}` to `docker-compose.yml` and documented in `README.md`.
+
 ## [1.6.52] - 2026-09-04
 
 ### Fixed

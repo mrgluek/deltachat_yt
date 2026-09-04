@@ -125,18 +125,21 @@ You can verify if the bot successfully logs in and has an active Yandex Plus sub
 - Run on host: `python3 check_yandex.py`
 - Run inside Docker: `docker compose run --rm yt_bot python check_yandex.py`
 
-### 4. Proxy Configuration (Bypass Yandex Geoblocking)
-Since Yandex Music is geoblocked outside Russia/CIS (returning "This page is no longer available" or CAPTCHAs to datacenter/foreign IPs), you will need a proxy to download Yandex Music tracks from foreign servers.
+### 4. Proxy Configuration (Bypass Geoblocking)
+Since Yandex Music, Rutube, VK Video, and other Russian services are often geoblocked or throttled outside Russia/CIS (or when accessed from foreign datacenter IPs), you can configure dedicated routing for Russian services while keeping international services (YouTube, Instagram, etc.) fast or routed through a residential backup.
 
 You can configure proxies in a `.env` file in the project directory:
 ```env
 # Global proxy for all downloads (YouTube, SoundCloud, etc.)
 PROXY=socks5://user:password@ip:port
 
-# Yandex-specific proxy (Only routes Yandex Music requests through this proxy, keeping YouTube downloads fast and direct)
-YANDEX_PROXY=http://user:password@ru_proxy_ip:port
+# Dedicated proxy for Russian services (VKontakte, VK Video, Rutube, Yandex, Dzen, OK.ru, Mail.ru)
+RU_PROXY=http://user:password@ru_proxy_ip:port
 
-# Backup proxy (Used as a fallback for YouTube/other downloads if primary connection/cookies fail)
+# Yandex-specific proxy override (Optional; takes precedence over RU_PROXY for Yandex Music if specified)
+YANDEX_PROXY=http://user:password@yandex_proxy_ip:port
+
+# Backup proxy (Used as a fallback for YouTube/other downloads if primary connection/cookies fail, e.g. home router)
 BACKUP_PROXY=http://user:password@backup_proxy_ip:port
 ```
 

@@ -14,7 +14,7 @@ def main():
     print("Please follow the instructions below:\n")
 
     import os
-    yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+    yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("RU_PROXY") or os.getenv("PROXY")
     old_http = os.environ.get("HTTP_PROXY")
     old_https = os.environ.get("HTTPS_PROXY")
     if yandex_proxy:

@@ -58,8 +58,8 @@ class TestServiceStatusDiagnostics(unittest.TestCase):
                     pass
 
     def test_version_bumped(self):
-        """Test bot.VERSION is 1.6.52."""
-        self.assertEqual(bot.VERSION, "1.6.52")
+        """Test bot.VERSION is 1.6.53."""
+        self.assertEqual(bot.VERSION, "1.6.53")
 
     def test_sanitize_cookies_file_in_place(self):
         """Test _sanitize_cookies_file rewrites invalid cookie file on disk to valid Netscape format."""
@@ -305,6 +305,104 @@ class TestServiceStatusDiagnostics(unittest.TestCase):
         self.assertNotIn("Yandex Music:", sent_reply)
         self.assertNotIn("Navidrome:", sent_reply)
         self.assertNotIn("Disk Space", sent_reply)
+
+    def test_is_ru_service_url(self):
+        """Test domain identification for Russian services."""
+        ru_urls = [
+            "https://vk.com/video-12345_67890",
+            "https://m.vk.com/video",
+            "https://vkvideo.ru/video-123_456",
+            "https://vk.ru/video123",
+            "https://rutube.ru/video/abcdef123456/",
+            "https://music.yandex.ru/album/123/track/456",
+            "https://yandex.ru/video/preview/123",
+            "https://ya.ru/video/123",
+            "https://dzen.ru/video/watch/654321",
+            "https://ok.ru/video/123456789",
+            "https://odnoklassniki.ru/video/12345",
+            "https://my.mail.ru/mail/user/video/1/2.html",
+            "https://smotrim.ru/video/98765",
+            "https://1tv.ru/live",
+            "https://ntv.ru/video/123",
+        ]
+        for u in ru_urls:
+            self.assertTrue(bot._is_ru_service_url(u), f"Expected {u} to be detected as RU service")
+
+        non_ru_urls = [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtu.be/dQw4w9WgXcQ",
+            "https://www.instagram.com/reel/C7xY123/",
+            "https://tiktok.com/@user/video/123",
+            "https://soundcloud.com/artist/track",
+            "https://vimeo.com/123456",
+            "dQw4w9WgXcQ",
+            "",
+            None,
+        ]
+        for u in non_ru_urls:
+            self.assertFalse(bot._is_ru_service_url(u), f"Expected {u} NOT to be detected as RU service")
+
+    def test_get_active_proxy_routing(self):
+        """Test proxy routing precedence across global, Russian, and Yandex proxies."""
+        with patch.object(bot, "PROXY", "http://global:8080"), \
+             patch.object(bot, "RU_PROXY", "http://ru:8080"), \
+             patch.object(bot, "YANDEX_PROXY", "http://yandex:8080"):
+            
+            # YouTube and global services use PROXY
+            self.assertEqual(bot._get_active_proxy("https://youtube.com/watch?v=123"), "http://global:8080")
+            self.assertEqual(bot._get_active_proxy("https://instagram.com/reel/123"), "http://global:8080")
+            self.assertEqual(bot._get_active_proxy("12345678901"), "http://global:8080")
+
+            # Russian services use RU_PROXY
+            self.assertEqual(bot._get_active_proxy("https://vk.com/video-1_2"), "http://ru:8080")
+            self.assertEqual(bot._get_active_proxy("https://rutube.ru/video/123"), "http://ru:8080")
+            self.assertEqual(bot._get_active_proxy("https://ok.ru/video/123"), "http://ru:8080")
+            self.assertEqual(bot._get_active_proxy("https://dzen.ru/video/watch/123"), "http://ru:8080")
+
+            # Yandex uses YANDEX_PROXY when specified
+            self.assertEqual(bot._get_active_proxy("https://music.yandex.ru/album/1/track/2"), "http://yandex:8080")
+
+            # Custom proxy overrides everything
+            self.assertEqual(bot._get_active_proxy("https://vk.com/video-1_2", custom_proxy="http://custom:8080"), "http://custom:8080")
+            # Custom proxy="" forces direct connection (no proxy)
+            self.assertIsNone(bot._get_active_proxy("https://vk.com/video-1_2", custom_proxy=""))
+
+    def test_get_active_proxy_yandex_falls_back_to_ru_proxy(self):
+        """Test that Yandex requests fall back to RU_PROXY if YANDEX_PROXY is not configured."""
+        with patch.object(bot, "PROXY", "http://global:8080"), \
+             patch.object(bot, "RU_PROXY", "http://ru:8080"), \
+             patch.object(bot, "YANDEX_PROXY", None):
+            
+            self.assertEqual(bot._get_active_proxy("https://music.yandex.ru/album/1/track/2"), "http://ru:8080")
+            self.assertEqual(bot._get_active_proxy("https://ya.ru/video/123"), "http://ru:8080")
+
+    def test_get_active_proxy_without_ru_proxy(self):
+        """Test fallback to global PROXY when RU_PROXY is not set."""
+        with patch.object(bot, "PROXY", "http://global:8080"), \
+             patch.object(bot, "RU_PROXY", None), \
+             patch.object(bot, "YANDEX_PROXY", None):
+            
+            self.assertEqual(bot._get_active_proxy("https://vk.com/video-1_2"), "http://global:8080")
+            self.assertEqual(bot._get_active_proxy("https://rutube.ru/video/123"), "http://global:8080")
+
+    def test_get_fallback_configs_descriptions(self):
+        """Test descriptions generated in fallback configurations for Russian vs global services."""
+        with patch.object(bot, "RU_PROXY", "http://ru:8080"), \
+             patch.object(bot, "BACKUP_PROXY", "http://uk-router:8080"), \
+             patch("os.path.exists", return_value=True):
+            
+            # VK video fallback configs
+            vk_configs = bot._get_fallback_configs("https://vk.com/video-1_2")
+            self.assertIn("RU proxy with cookies", vk_configs[0]["desc"])
+            self.assertIn("RU proxy without cookies", vk_configs[1]["desc"])
+            self.assertIn("backup proxy without cookies", vk_configs[2]["desc"])
+            self.assertEqual(vk_configs[2]["proxy"], "http://uk-router:8080")
+
+            # YouTube fallback configs
+            yt_configs = bot._get_fallback_configs("https://youtube.com/watch?v=123")
+            self.assertIn("default proxy with cookies", yt_configs[0]["desc"])
+            self.assertIn("default proxy without cookies", yt_configs[1]["desc"])
+            self.assertIn("backup proxy without cookies", yt_configs[2]["desc"])
 
 
 if __name__ == "__main__":

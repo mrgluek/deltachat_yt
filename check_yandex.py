@@ -12,7 +12,7 @@ def check_cookies(cookies_path, test_track="150402031:41648883"):
         print("ℹ️ YANDEX_TOKEN is set. Verifying status using token...")
         try:
             from yandex_music import Client
-            yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+            yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("RU_PROXY") or os.getenv("PROXY")
             old_http = os.environ.get("HTTP_PROXY")
             old_https = os.environ.get("HTTPS_PROXY")
             if yandex_proxy:
@@ -74,7 +74,7 @@ def check_cookies(cookies_path, test_track="150402031:41648883"):
 
     # Build opener with cookies and optional proxy
     handlers = [urllib.request.HTTPCookieProcessor(cookie_jar)]
-    active_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+    active_proxy = os.getenv("YANDEX_PROXY") or os.getenv("RU_PROXY") or os.getenv("PROXY")
     if active_proxy:
         print(f"ℹ️ Routing check through proxy: {active_proxy}")
         handlers.append(urllib.request.ProxyHandler({'http': active_proxy, 'https': active_proxy}))

@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.52"
+VERSION = "1.6.53"
 
 dc_cli = BotCli("ytbot")
 
@@ -478,7 +478,7 @@ def _parse_yandex_music_url(url: str) -> tuple[str, str | None] | None:
 def _fetch_yandex_metadata(track_id: str, token: str) -> dict:
     """Fetch track metadata from Yandex Music API using OAuth token."""
     from yandex_music import Client
-    yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+    yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("RU_PROXY") or os.getenv("PROXY")
     old_http = os.environ.get("HTTP_PROXY")
     old_https = os.environ.get("HTTPS_PROXY")
     if yandex_proxy:
@@ -540,7 +540,7 @@ def _fetch_yandex_metadata(track_id: str, token: str) -> dict:
 def _download_yandex_track(track_id: str, token: str, filepath: str):
     """Download Yandex Music track using OAuth token."""
     from yandex_music import Client
-    yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+    yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("RU_PROXY") or os.getenv("PROXY")
     old_http = os.environ.get("HTTP_PROXY")
     old_https = os.environ.get("HTTPS_PROXY")
     if yandex_proxy:
@@ -922,7 +922,61 @@ def _is_bot_blocked(bot, accid, msg) -> bool:
 # Proxy settings
 PROXY = os.getenv("PROXY")
 YANDEX_PROXY = os.getenv("YANDEX_PROXY")
+RU_PROXY = os.getenv("RU_PROXY")
 BACKUP_PROXY = os.getenv("BACKUP_PROXY")
+
+RU_SERVICE_DOMAINS = (
+    "vk.com",
+    "vkvideo.ru",
+    "vk.ru",
+    "rutube.ru",
+    "yandex.",
+    "ya.ru",
+    "dzen.ru",
+    "ok.ru",
+    "odnoklassniki.ru",
+    "mail.ru",
+    "smotrim.ru",
+    "1tv.ru",
+    "ntv.ru",
+)
+
+def _is_ru_service_url(url: str) -> bool:
+    """Detect if a URL belongs to a Russian video/music streaming service."""
+    if not url:
+        return False
+    url_lower = url.lower()
+    if url_lower.startswith("http://") or url_lower.startswith("https://"):
+        try:
+            from urllib.parse import urlparse
+            netloc = urlparse(url_lower).netloc
+            host = netloc.split(":")[0]
+            for d in RU_SERVICE_DOMAINS:
+                if d.endswith("."):
+                    if d[:-1] in host.split("."):
+                        return True
+                elif host == d or host.endswith("." + d):
+                    return True
+        except Exception:
+            pass
+    for d in RU_SERVICE_DOMAINS:
+        if d in url_lower:
+            return True
+    return False
+
+def _get_active_proxy(url: str = None, custom_proxy: str = None) -> str | None:
+    """Determine the active proxy to use for a given URL based on service and overrides."""
+    if custom_proxy is not None:
+        return custom_proxy if custom_proxy != "" else None
+    if not url:
+        return PROXY
+    url_str = _make_yt_url(url)
+    url_lower = url_str.lower()
+    if "yandex." in url_lower or "ya.ru" in url_lower:
+        return YANDEX_PROXY or RU_PROXY or PROXY
+    if _is_ru_service_url(url_lower):
+        return RU_PROXY or PROXY
+    return PROXY
 
 _active_yandex_tld = None
 
@@ -1004,9 +1058,7 @@ async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_prox
     if player_client:
         cmd.extend(["--extractor-args", f"youtube:player_client={player_client}"])
     
-    active_proxy = custom_proxy if custom_proxy is not None else PROXY
-    if "yandex." in url and YANDEX_PROXY and custom_proxy is None:
-        active_proxy = YANDEX_PROXY
+    active_proxy = _get_active_proxy(url, custom_proxy)
     if active_proxy:
         cmd.extend(["--proxy", active_proxy])
         
@@ -1040,12 +1092,21 @@ async def _fetch_video_info(video_id: str, use_cookies: bool = True, custom_prox
         return None, str(e)
 
 
-def _get_fallback_configs() -> list[dict]:
+def _get_fallback_configs(video_id: str = None) -> list[dict]:
     cookies_exist = os.path.exists(os.path.join("data", "cookies.txt"))
     configs = []
-    configs.append({"use_cookies": True, "proxy": None, "desc": "default proxy with cookies" if cookies_exist else "default proxy without cookies"})
+    url = _make_yt_url(video_id) if video_id else ""
+    is_ru = _is_ru_service_url(url)
+    if is_ru and (RU_PROXY or YANDEX_PROXY):
+        proxy_desc = "RU proxy"
+    elif "yandex." in url.lower() and YANDEX_PROXY:
+        proxy_desc = "Yandex proxy"
+    else:
+        proxy_desc = "default proxy"
+
+    configs.append({"use_cookies": True, "proxy": None, "desc": f"{proxy_desc} with cookies" if cookies_exist else f"{proxy_desc} without cookies"})
     if cookies_exist:
-        configs.append({"use_cookies": False, "proxy": None, "desc": "default proxy without cookies"})
+        configs.append({"use_cookies": False, "proxy": None, "desc": f"{proxy_desc} without cookies"})
     if BACKUP_PROXY:
         configs.append({"use_cookies": False, "proxy": BACKUP_PROXY, "desc": "backup proxy without cookies"})
         if cookies_exist:
@@ -1055,7 +1116,7 @@ def _get_fallback_configs() -> list[dict]:
 
 async def _fetch_video_info_with_fallback(video_id: str) -> tuple[dict | None, str | None, int]:
     """Fetch video metadata with cookie/proxy fallback attempts. Returns (info, error_msg, successful_config_idx)."""
-    configs = _get_fallback_configs()
+    configs = _get_fallback_configs(video_id)
     info = None
     error = None
     successful_idx = 0
@@ -1120,9 +1181,7 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
         cmd.extend(["--extractor-args", f"youtube:player_client={effective_player_client}"])
     
     url = _make_yt_url(video_id)
-    active_proxy = custom_proxy if custom_proxy is not None else PROXY
-    if "yandex." in url and YANDEX_PROXY and custom_proxy is None:
-        active_proxy = YANDEX_PROXY
+    active_proxy = _get_active_proxy(url, custom_proxy)
     if active_proxy:
         cmd.extend(["--proxy", active_proxy])
         
@@ -1840,7 +1899,8 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
     if pp_args:
         cmd.extend(pp_args)
     
-    active_proxy = custom_proxy if custom_proxy is not None else PROXY
+    url = _make_yt_url(video_id)
+    active_proxy = _get_active_proxy(url, custom_proxy)
     if active_proxy:
         cmd.extend(["--proxy", active_proxy])
         
@@ -1849,7 +1909,7 @@ async def _download_audio(video_id: str, output_dir: str, duration: int, start_t
         _sanitize_cookies_file(cookies_path)
         cmd.extend(["--cookies", cookies_path])
         
-    cmd.append(_make_yt_url(video_id))
+    cmd.append(url)
     
     try:
         async with _download_semaphore:
@@ -2232,7 +2292,7 @@ def _check_yandex_status() -> tuple[bool, str]:
     if token:
         try:
             from yandex_music import Client
-            yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("PROXY")
+            yandex_proxy = os.getenv("YANDEX_PROXY") or os.getenv("RU_PROXY") or os.getenv("PROXY")
             old_http = os.environ.get("HTTP_PROXY")
             old_https = os.environ.get("HTTPS_PROXY")
             if yandex_proxy:
@@ -2280,7 +2340,7 @@ def _check_yandex_status() -> tuple[bool, str]:
     tlds_to_try = list(yandex_tlds) if yandex_tlds else ['ru', 'by', 'kz', 'uz', 'com']
 
     handlers = [urllib.request.HTTPCookieProcessor(cookie_jar)]
-    active_proxy = YANDEX_PROXY or PROXY
+    active_proxy = YANDEX_PROXY or RU_PROXY or PROXY
     if active_proxy:
         handlers.append(urllib.request.ProxyHandler({'http': active_proxy, 'https': active_proxy}))
     opener = urllib.request.build_opener(*handlers)
@@ -2495,7 +2555,7 @@ async def _do_ytms(bot, accid, msg, video_id: str):
         _react(bot, accid, req_msg_id, "⏳")
 
         # 1. Fetch info
-        configs = _get_fallback_configs()
+        configs = _get_fallback_configs(video_id)
         info, error, successful_config_index = await _fetch_video_info_with_fallback(video_id)
         if not info:
             _react(bot, accid, req_msg_id, "❌")
@@ -2748,7 +2808,7 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
             return
     
         # 3. Fetch info to know duration for audio strategy
-        configs = _get_fallback_configs()
+        configs = _get_fallback_configs(video_id)
         info, error, successful_config_index = await _fetch_video_info_with_fallback(video_id)
 
         if not info:
