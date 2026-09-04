@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.54] - 2026-09-04
+
+### Improved
+- **Automatic Direct Download for Instagram Reels:**
+  - When an Instagram Reel link (`/reel/` or `/reels/`) is shared in a chat, automatically download and send the MP4 video directly instead of sending an intermediate preview card with download buttons.
+  - Automatically strip trailing punctuation (e.g. `)`, `.`, `,`) from auto-detected media URLs to prevent broken link extraction.
+
 ## [1.6.53] - 2026-09-04
 
 ### Added

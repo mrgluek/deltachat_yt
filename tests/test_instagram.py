@@ -57,8 +57,8 @@ class TestInstagramHandling(unittest.TestCase):
                     pass
 
     def test_version_bumped(self):
-        """Test bot.VERSION is 1.6.53."""
-        self.assertEqual(bot.VERSION, "1.6.53")
+        """Test bot.VERSION is 1.6.54."""
+        self.assertEqual(bot.VERSION, "1.6.54")
 
     def test_clean_error_no_video_in_post(self):
         """Test _clean_error formats 'There is no video in this post' nicely."""
@@ -125,6 +125,40 @@ class TestInstagramHandling(unittest.TestCase):
         mock_react.assert_called_once_with(mock_bot, 1, 123, "")
         # No error message should be sent to the chat
         mock_send.assert_not_called()
+
+    def test_is_instagram_reel(self):
+        """Test _is_instagram_reel correctly identifies Reels vs other posts."""
+        self.assertTrue(bot._is_instagram_reel("https://www.instagram.com/reel/DYEjIXBh_9d/"))
+        self.assertTrue(bot._is_instagram_reel("https://www.instagram.com/kotkefir98/reel/DYEjIXBh_9d/"))
+        self.assertTrue(bot._is_instagram_reel("https://instagram.com/reels/DYEjIXBh_9d/?igsh=123"))
+        self.assertTrue(bot._is_instagram_reel("https://instagr.am/reel/DYEjIXBh_9d/"))
+        self.assertFalse(bot._is_instagram_reel("https://www.instagram.com/kotkefir98/p/Dc3qj0nIC-v/"))
+        self.assertFalse(bot._is_instagram_reel("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+
+    @patch("threading.Thread")
+    @patch("bot._is_rate_limited", return_value=False)
+    @patch("bot._is_bot_blocked", return_value=False)
+    @patch("bot._react")
+    def test_on_new_message_auto_downloads_reel(self, mock_react, mock_blocked, mock_rate, mock_thread):
+        """Test that Instagram Reel links directly dispatch _run_download instead of _handle_link_info."""
+        mock_bot = MagicMock()
+        mock_event = MagicMock()
+        mock_event.msg = MagicMock()
+        mock_event.msg.id = 100
+        mock_event.msg.chat_id = 42
+        mock_event.msg.from_id = 11
+        mock_event.msg.is_info = False
+        mock_event.msg.text = "Check this https://www.instagram.com/kotkefir98/reel/DYEjIXBh_9d/ cool!"
+
+        with patch.object(bot, "dc_accid", 1):
+            bot.on_new_message(mock_bot, 1, mock_event)
+
+        mock_thread.assert_called_once()
+        target = mock_thread.call_args[1]["target"]
+        args = mock_thread.call_args[1]["args"]
+        self.assertEqual(target, bot._run_download)
+        self.assertEqual(args[3], "https://www.instagram.com/kotkefir98/reel/DYEjIXBh_9d/")
+        self.assertEqual(args[4], "video")
 
 
 if __name__ == "__main__":

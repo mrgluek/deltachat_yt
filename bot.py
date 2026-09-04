@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.53"
+VERSION = "1.6.54"
 
 dc_cli = BotCli("ytbot")
 
@@ -142,6 +142,15 @@ YANDEX_PREVIEW_RE = re.compile(
 AUDIO_ONLY_URL_RE = re.compile(
     r'https?://(?:www\.)?(?:soundcloud\.com|music\.yandex\.(?:ru|com|by|kz)|music\.youtube\.com)/'
 )
+
+INSTAGRAM_REEL_RE = re.compile(
+    r'https?://(?:www\.|m\.)?(?:instagram\.com|instagr\.am)/(?:[^/]+/)?(?:reel|reels)/[A-Za-z0-9_-]+',
+    re.IGNORECASE
+)
+
+def _is_instagram_reel(url: str) -> bool:
+    """Return True if URL points specifically to an Instagram Reel."""
+    return bool(INSTAGRAM_REEL_RE.search(url))
 
 def _unescape_json_string(s: str) -> str:
     r"""Safely unescape JSON string values (like \/ and unicode escapes)."""
@@ -3603,6 +3612,7 @@ def on_new_message(bot, accid, event):
             video_id = url_match.group(0) if url_match else yt_match.group(0)
         else:
             video_id = yt_match.group(1)
+        video_id = video_id.rstrip(")]},;:.")
         logger.info(f"Auto-detected YouTube link in chat {msg.chat_id} from {msg.from_id}: {video_id}")
         _react(bot, accid, msg.id, "🤖")
         t = threading.Thread(target=_handle_link_info, args=(bot, accid, msg, video_id), daemon=True)
@@ -3612,7 +3622,7 @@ def on_new_message(bot, accid, event):
     # 2.6. Auto-detect Yandex Video Preview links
     yandex_match = YANDEX_PREVIEW_RE.search(text)
     if yandex_match:
-        yandex_url = yandex_match.group(0)
+        yandex_url = yandex_match.group(0).rstrip(")]},;:.")
         logger.info(f"Auto-detected Yandex preview link in chat {msg.chat_id} from {msg.from_id}: {yandex_url}")
         _react(bot, accid, msg.id, "🤖")
         t = threading.Thread(target=_handle_yandex_preview, args=(bot, accid, msg, yandex_url), daemon=True)
@@ -3622,8 +3632,17 @@ def on_new_message(bot, accid, event):
     # 2.5. Auto-detect other supported links (Vimeo, Twitter, Insta, PeerTube, etc.)
     supported_match = SUPPORTED_URL_RE.search(text)
     if supported_match:
-        video_id = supported_match.group(0) # Full URL
+        video_id = supported_match.group(0).rstrip(")]},;:.") # Full URL
         logger.info(f"Auto-detected supported link in chat {msg.chat_id} from {msg.from_id}: {video_id}")
+        if _is_instagram_reel(video_id):
+            if _is_rate_limited(bot, accid, msg.from_id):
+                _send(bot, accid, msg.chat_id, f"⏱ Please wait {RATE_LIMIT_SECONDS}s between downloads.")
+                return
+            _react(bot, accid, msg.id, "🤖")
+            t = threading.Thread(target=_run_download, args=(bot, accid, msg, video_id, "video"), daemon=True)
+            t.start()
+            return
+
         _react(bot, accid, msg.id, "🤖")
         t = threading.Thread(target=_handle_link_info, args=(bot, accid, msg, video_id), daemon=True)
         t.start()
