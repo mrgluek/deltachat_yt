@@ -30,5 +30,6 @@ docker-compose.override.yml
 
 # Test media and scratch files
 *.opus
+*.info.json
 empty_cookies.txt
 test_cookies.txt

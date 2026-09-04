@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.51] - 2026-09-04
+
+### Improved
+- **Instagram Photo Post Fast-Exit & Reaction Cleanup:**
+  - Added fast-failure detection for Instagram photo posts when `yt-dlp` returns `There is no video in this post`, immediately aborting unnecessary retry cycles across backup proxy and cookie configurations.
+  - Automatically clears the bot reaction (`🤖`) on photo posts without sending error messages, enabling clean coexistence with WebPreview bot in shared chats.
+  - Added short domain `instagr.am/` support to `SUPPORTED_URL_RE`.
+
 ## [1.6.50] - 2026-08-26
 
 ### Fixed

@@ -58,8 +58,8 @@ class TestNavidromeIntegration(unittest.TestCase):
                     pass
 
     def test_version_bumped(self):
-        """Test bot.VERSION is 1.6.50."""
-        self.assertEqual(bot.VERSION, "1.6.50")
+        """Test bot.VERSION is 1.6.51."""
+        self.assertEqual(bot.VERSION, "1.6.51")
 
     def test_sanitize_filename(self):
         """Test filename sanitization for various edge cases and illegal characters."""
@@ -327,9 +327,10 @@ class TestNavidromeIntegration(unittest.TestCase):
     @patch("bot._trigger_subsonic_scan", return_value=(True, "Scan initiated"))
     @patch("bot._save_to_navidrome")
     @patch("bot._fetch_video_info_with_fallback")
+    @patch("bot._check_disk_space", return_value=True)
     @patch("bot._send")
     @patch("bot._react")
-    def test_do_ytms_sends_text_without_file_attachment(self, mock_react, mock_send, mock_fetch_info, mock_save, mock_scan, mock_nav_cfg):
+    def test_do_ytms_sends_text_without_file_attachment(self, mock_react, mock_send, mock_disk, mock_fetch_info, mock_save, mock_scan, mock_nav_cfg):
         """Verify _do_ytms sends text confirmation only, without attaching audio file."""
         mock_nav_cfg.return_value = ("https://music.example.com", "admin", "pwd", None, None, self.temp_dir)
         mock_save.return_value = (os.path.join(self.temp_dir, "Track.opus"), None, None)

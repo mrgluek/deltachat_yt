@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.50"
+VERSION = "1.6.51"
 
 dc_cli = BotCli("ytbot")
 
@@ -118,7 +118,7 @@ SUPPORTED_URL_RE = re.compile(
     r'vkvideo\.ru/|'
     r'twitter\.com/|x\.com/|'
     r'reddit\.com/r/|'
-    r'instagram\.com/|'
+    r'instagram\.com/|instagr\.am/|'
     r'tiktok\.com/|'
     r'twitch\.tv/|'
     r'bilibili\.com/|'
@@ -931,6 +931,8 @@ def _clean_error(err: str) -> str:
     if not err:
         return "Unknown error"
     err_lower = err.lower()
+    if "there is no video in this post" in err_lower or "no video in this post" in err_lower:
+        return "Instagram error: There is no video in this post."
     if "the page needs to be reloaded" in err_lower:
         return "YouTube error: The page needs to be reloaded (cookies in data/cookies.txt may be expired, invalid, or flagged by YouTube bot protection)."
     if "unable to download video data: http error 403: forbidden" in err_lower or "http error 403: forbidden" in err_lower:
@@ -1065,6 +1067,9 @@ async def _fetch_video_info_with_fallback(video_id: str) -> tuple[dict | None, s
             break
         else:
             logger.info(f"Failed to fetch video info using {cfg['desc']}: {error}. Trying next config...")
+            if error and ("there is no video in this post" in error.lower() or "no video in this post" in error.lower()):
+                logger.info(f"Fast-failing video info fallback search for non-video post: {error}")
+                break
             
     return info, error, successful_idx
 
@@ -2837,6 +2842,10 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
                     if error:
                         last_error = error
                         logger.info(f"Download attempt using {cfg['desc']} failed for {video_id}: {error}.")
+                        if "no video in this post" in error.lower() or "there is no video in this post" in error.lower():
+                            _react(bot, accid, req_msg_id, "❌")
+                            _send(bot, accid, chat_id, f"❌ {error}")
+                            return
                         if idx < len(configs) - 1:
                             logger.info("Retrying with next configuration...")
                             continue
@@ -3607,6 +3616,12 @@ def _handle_link_info(bot, accid, msg, video_id: str):
         loop.close()
 
     if not info:
+        # Fast exit for non-video / photo posts: remove reaction without sending error message
+        if error and ("there is no video in this post" in error.lower() or "no video in this post" in error.lower()):
+            logger.info(f"Ignoring non-video post for {video_id}: {error}")
+            _react(bot, accid, msg.id, "")
+            return
+
         if error and ("This video is not available" in error or "Private video" in error):
              _send(bot, accid, msg.chat_id, f"❌ {error}")
         return
