@@ -208,6 +208,16 @@ Then restart the container:
 docker compose up -d
 ```
 
+## Configuration & Environment Variables
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `DISPLAY_NAME` | Custom display name for the Delta Chat bot profile. | `YT Bot` |
+| `STATUS_TEXT` | Custom bio/status description for the Delta Chat bot profile. | `I download YouTube videos and audio. Send /help for commands.` |
+| `PROXY` | HTTP/SOCKS proxy for media downloads. | *(empty)* |
+| `RU_PROXY` | Proxy for Russian platforms (VK, Rutube, Yandex, etc.). | *(empty)* |
+| `YANDEX_TOKEN` | Token for high-quality Yandex Music tracks. | *(empty)* |
+
 ## Admin Management
 
 You can also manage the administrator via the CLI:
