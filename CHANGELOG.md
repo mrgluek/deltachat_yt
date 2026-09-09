@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.57] - 2026-09-09
+
+### Fixed
+- **Cache Cleaner NameError**:
+  - Define `CACHE_MAX_SIZE` (with `MAX_CACHE_SIZE` backward compatibility alias) matching references in `_cache_cleaner_loop`, resolving runtime `NameError: name 'CACHE_MAX_SIZE' is not defined`.
+  - Extract `_clean_cache_once()` helper for deterministic cache pruning execution and isolated testing.
+  - Add dedicated test suite `tests/test_cache.py` covering cache expiration, size limit enforcement, thumbnail cleanup, and database retention integration.
+
 ## [1.6.56] - 2026-09-09
 
 ### Security

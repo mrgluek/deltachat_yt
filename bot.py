@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.56"
+VERSION = "1.6.57"
 
 dc_cli = BotCli("ytbot")
 
@@ -44,7 +44,8 @@ ANTI_SPAM_SECONDS = 600  # 10 minutes
 
 # Cache settings
 CACHE_DIR = os.path.join("data", "cache")
-MAX_CACHE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+CACHE_MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+MAX_CACHE_SIZE = CACHE_MAX_SIZE  # Backward compatibility alias
 CACHE_MAX_AGE = 86400  # 24 hours
 THUMB_CACHE_DIR = os.path.join("data", "thumbnails")
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
@@ -4025,58 +4026,70 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
     _send(bot, accid, msg.chat_id, "\n".join(lines), file=thumb_path)
 
 
+def _clean_cache_once(now: float = None):
+    """Perform a single pass of cache and thumbnail cleanup, plus database retention pruning."""
+    if now is None:
+        now = time.time()
+
+    if os.path.exists(CACHE_DIR):
+        files = []
+        total_size = 0
+
+        for f in os.listdir(CACHE_DIR):
+            path = os.path.join(CACHE_DIR, f)
+            if not os.path.isfile(path):
+                continue
+            
+            mtime = os.path.getmtime(path)
+            size = os.path.getsize(path)
+            
+            if now - mtime > CACHE_MAX_AGE:
+                logger.info(f"Removing old cache file: {f}")
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                continue
+            
+            files.append((path, mtime, size))
+            total_size += size
+
+        # If still over size limit, remove oldest files
+        if total_size > CACHE_MAX_SIZE:
+            # Sort by mtime (oldest first)
+            files.sort(key=lambda x: x[1])
+            for path, mtime, size in files:
+                logger.info(f"Cache limit exceeded, removing oldest: {os.path.basename(path)}")
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                total_size -= size
+                if total_size <= CACHE_MAX_SIZE:
+                    break
+
+    # Also clean thumbnails older than CACHE_MAX_AGE
+    if os.path.exists(THUMB_CACHE_DIR):
+        for f in os.listdir(THUMB_CACHE_DIR):
+            path = os.path.join(THUMB_CACHE_DIR, f)
+            if os.path.isfile(path) and now - os.path.getmtime(path) > CACHE_MAX_AGE:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+    # Prune old database records and flush transport statistics
+    try:
+        database.cleanup_old_records()
+    except Exception as db_err:
+        logger.error(f"Error in DB cleanup: {db_err}")
+
+
 async def _cache_cleaner_loop():
     """Background task to keep cache within limits (2GB, 24h)."""
     while True:
         try:
-            if not os.path.exists(CACHE_DIR):
-                await asyncio.sleep(3600)
-                continue
-
-            now = time.time()
-            files = []
-            total_size = 0
-
-            for f in os.listdir(CACHE_DIR):
-                path = os.path.join(CACHE_DIR, f)
-                if not os.path.isfile(path):
-                    continue
-                
-                mtime = os.path.getmtime(path)
-                size = os.path.getsize(path)
-                
-                if now - mtime > CACHE_MAX_AGE:
-                    logger.info(f"Removing old cache file: {f}")
-                    os.remove(path)
-                    continue
-                
-                files.append((path, mtime, size))
-                total_size += size
-
-            # If still over size limit, remove oldest files
-            if total_size > CACHE_MAX_SIZE:
-                # Sort by mtime (oldest first)
-                files.sort(key=lambda x: x[1])
-                for path, mtime, size in files:
-                    logger.info(f"Cache limit exceeded, removing oldest: {os.path.basename(path)}")
-                    os.remove(path)
-                    total_size -= size
-                    if total_size <= CACHE_MAX_SIZE:
-                        break
-
-            # Also clean thumbnails older than CACHE_MAX_AGE
-            if os.path.exists(THUMB_CACHE_DIR):
-                for f in os.listdir(THUMB_CACHE_DIR):
-                    path = os.path.join(THUMB_CACHE_DIR, f)
-                    if os.path.isfile(path) and now - os.path.getmtime(path) > CACHE_MAX_AGE:
-                        os.remove(path)
-
-            # Prune old database records and flush transport statistics
-            try:
-                database.cleanup_old_records()
-            except Exception as db_err:
-                logger.error(f"Error in DB cleanup: {db_err}")
-
+            _clean_cache_once()
         except Exception as e:
             logger.error(f"Error in cache cleaner: {e}")
             
