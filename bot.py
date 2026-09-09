@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.55"
+VERSION = "1.6.56"
 
 dc_cli = BotCli("ytbot")
 
@@ -35,6 +35,7 @@ DC_CONTACT_ID_SELF = 1
 
 # Rate limiting: {from_id: last_request_timestamp}
 _user_rate_limits: dict[int, float] = {}
+_user_rate_limits_lock = threading.Lock()
 RATE_LIMIT_SECONDS = 60
 
 # Anti-spam: {chat_id: {video_id_type: timestamp}}
@@ -43,9 +44,8 @@ ANTI_SPAM_SECONDS = 600  # 10 minutes
 
 # Cache settings
 CACHE_DIR = os.path.join("data", "cache")
-CACHE_MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
-CACHE_MAX_AGE = 24 * 3600  # 24 hours
-
+MAX_CACHE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+CACHE_MAX_AGE = 86400  # 24 hours
 THUMB_CACHE_DIR = os.path.join("data", "thumbnails")
 os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
 
@@ -61,7 +61,7 @@ class RefCountLock:
 _global_lock_mgr = threading.Lock()
 _download_locks: dict[str, RefCountLock] = {}
 
-_processed_msg_ids = set()
+_processed_msg_ids: collections.OrderedDict[str, None] = collections.OrderedDict()
 _processed_msg_lock = threading.Lock()
 
 def _is_duplicate_msg(msg_id: int, handler: str) -> bool:
@@ -69,12 +69,9 @@ def _is_duplicate_msg(msg_id: int, handler: str) -> bool:
         key = f"{handler}_{msg_id}"
         if key in _processed_msg_ids:
             return True
-        _processed_msg_ids.add(key)
-        if len(_processed_msg_ids) > 1000:
-            # Simple cleanup, keep only the latest 500 to avoid memory leak
-            latest = list(_processed_msg_ids)[-500:]
-            _processed_msg_ids.clear()
-            _processed_msg_ids.update(latest)
+        _processed_msg_ids[key] = None
+        while len(_processed_msg_ids) > 1000:
+            _processed_msg_ids.popitem(last=False)
         return False
 
 @contextlib.contextmanager
@@ -799,11 +796,17 @@ def _is_rate_limited(bot, accid, from_id) -> bool:
     if _is_dc_admin(bot, accid, from_id):
         return False
     now = time.time()
-    last = _user_rate_limits.get(from_id, 0)
-    if now - last < RATE_LIMIT_SECONDS:
-        return True
-    _user_rate_limits[from_id] = now
-    return False
+    with _user_rate_limits_lock:
+        last = _user_rate_limits.get(from_id, 0)
+        if now - last < RATE_LIMIT_SECONDS:
+            return True
+        _user_rate_limits[from_id] = now
+        if len(_user_rate_limits) > 500:
+            cutoff = now - max(60.0, RATE_LIMIT_SECONDS * 2)
+            expired = [uid for uid, t in _user_rate_limits.items() if t < cutoff]
+            for uid in expired:
+                del _user_rate_limits[uid]
+        return False
 
 
 def _send(bot, accid, chat_id, text, file=None):
@@ -3220,7 +3223,8 @@ def transports_command(bot, accid, event):
     try:
         transports = bot.rpc.list_transports(accid)
     except Exception as e:
-        _send(bot, accid, msg.chat_id, f"❌ Failed to list transports: {e}")
+        logger.error(f"Failed to list transports: {e}")
+        _send(bot, accid, msg.chat_id, "❌ Failed to list transports. Check server logs for details.")
         return
 
     if not transports:
@@ -3309,12 +3313,60 @@ def transports_command(bot, accid, event):
     reply += f"Total transports: {len(transport_addrs)}"
     _send(bot, accid, msg.chat_id, reply)
 
+def _parse_chat_info_is_private(chat_info) -> bool:
+    if isinstance(chat_info, dict):
+        chat_type = chat_info.get("chatType") or chat_info.get("chat_type")
+        if isinstance(chat_type, str) and chat_type.lower() == "single":
+            return True
+        type_val = chat_info.get("type")
+        if type_val in (1, "1"):
+            return True
+    else:
+        chat_type = getattr(chat_info, "chat_type", None) or getattr(chat_info, "chatType", None)
+        if isinstance(chat_type, str) and chat_type.lower() == "single":
+            return True
+        type_val = getattr(chat_info, "type", None)
+        if type_val in (1, "1"):
+            return True
+    return False
+
+def _is_private_chat(bot, accid, chat_id) -> bool:
+    # 1. Try get_basic_chat_info
+    try:
+        chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
+        if chat_info:
+            return _parse_chat_info_is_private(chat_info)
+    except Exception as e:
+        logger.debug(f"get_basic_chat_info failed: {e}")
+
+    # 2. Fallback to get_full_chat_by_id
+    try:
+        chat_info = bot.rpc.get_full_chat_by_id(accid, chat_id)
+        if chat_info:
+            return _parse_chat_info_is_private(chat_info)
+    except Exception as e:
+        logger.debug(f"get_full_chat_by_id failed: {e}")
+
+    # 3. Ultimate fallback: get_chat_contacts length check
+    try:
+        contacts = bot.rpc.get_chat_contacts(accid, chat_id)
+        if isinstance(contacts, list) and len(contacts) == 1:
+            return True
+    except Exception as e:
+        logger.error(f"get_chat_contacts failed: {e}")
+
+    return False
+
 @dc_cli.on(events.NewMessage(command="/addtransport"))
 def addtransport_command(bot, accid, event):
     """Add a backup mail relay (transport). Admin only."""
     msg = event.msg
     if not _is_dc_admin(bot, accid, msg.from_id):
         _send(bot, accid, msg.chat_id, "❌ Only the bot administrator can use /addtransport.")
+        return
+
+    if not _is_private_chat(bot, accid, msg.chat_id):
+        _send(bot, accid, msg.chat_id, "❌ For security reasons, /addtransport can only be used in a private 1:1 chat with the bot.")
         return
 
     payload = event.payload.strip() if event.payload else ""
@@ -3342,7 +3394,8 @@ def addtransport_command(bot, accid, event):
             bot.rpc.add_or_update_transport(accid, {"addr": addr, "password": password})
             _send(bot, accid, msg.chat_id, f"✅ Backup transport `{addr}` added.")
     except Exception as e:
-        _send(bot, accid, msg.chat_id, f"❌ Failed to add transport: {e}")
+        logger.error(f"Failed to add transport: {e}")
+        _send(bot, accid, msg.chat_id, "❌ Failed to add transport. Check server logs for details.")
 
 @dc_cli.on(events.NewMessage(command="/setprimary"))
 def setprimary_command(bot, accid, event):
@@ -3362,7 +3415,8 @@ def setprimary_command(bot, accid, event):
         bot.rpc.set_config(accid, "configured_addr", addr)
         _send(bot, accid, msg.chat_id, f"✅ Primary address (`configured_addr`) is now `{addr}`.")
     except Exception as e:
-        _send(bot, accid, msg.chat_id, f"❌ Failed to set primary address: {e}")
+        logger.error(f"Failed to set primary address: {e}")
+        _send(bot, accid, msg.chat_id, "❌ Failed to set primary address. Check server logs for details.")
 
 @dc_cli.on(events.NewMessage(command="/resilient"))
 def resilient_command(bot, accid, event):
@@ -3389,7 +3443,8 @@ def resilient_command(bot, accid, event):
         else:
             _send(bot, accid, msg.chat_id, "❌ Invalid argument. Use '/resilient on', '/resilient off', or '/resilient' to get status.")
     except Exception as e:
-        _send(bot, accid, msg.chat_id, f"❌ Failed to update resilient mode: {e}")
+        logger.error(f"Failed to update resilient mode: {e}")
+        _send(bot, accid, msg.chat_id, "❌ Failed to update resilient mode. Check server logs for details.")
 
 @dc_cli.on(events.NewMessage(command="/rmtransport"))
 def rmtransport_command(bot, accid, event):
@@ -3417,14 +3472,16 @@ def rmtransport_command(bot, accid, event):
             _send(bot, accid, msg.chat_id, f"❌ Transport `{addr}` not found.")
             return
     except Exception as e:
-        _send(bot, accid, msg.chat_id, f"❌ Failed to check transports: {e}")
+        logger.error(f"Failed to check transports: {e}")
+        _send(bot, accid, msg.chat_id, "❌ Failed to check transports. Check server logs for details.")
         return
 
     try:
         bot.rpc.delete_transport(accid, addr)
         _send(bot, accid, msg.chat_id, f"✅ Transport `{addr}` removed.")
     except Exception as e:
-        _send(bot, accid, msg.chat_id, f"❌ Failed to remove transport: {e}")
+        logger.error(f"Failed to remove transport: {e}")
+        _send(bot, accid, msg.chat_id, "❌ Failed to remove transport. Check server logs for details.")
 
 
 @dc_cli.on(events.NewMessage(command="/stats"))
@@ -3491,6 +3548,10 @@ def donate_command(bot, accid, event):
 @dc_cli.on(events.NewMessage(command="/initadmin"))
 def initadmin_command(bot, accid, event):
     msg = event.msg
+    if not _is_private_chat(bot, accid, msg.chat_id):
+        _send(bot, accid, msg.chat_id, "❌ For security reasons, /initadmin can only be used in a private 1:1 chat with the bot.")
+        return
+
     admin_email = database.get_config("admin_dc_email")
     admin_fp = database.get_admin_fingerprint()
 
@@ -4010,6 +4071,12 @@ async def _cache_cleaner_loop():
                     if os.path.isfile(path) and now - os.path.getmtime(path) > CACHE_MAX_AGE:
                         os.remove(path)
 
+            # Prune old database records and flush transport statistics
+            try:
+                database.cleanup_old_records()
+            except Exception as db_err:
+                logger.error(f"Error in DB cleanup: {db_err}")
+
         except Exception as e:
             logger.error(f"Error in cache cleaner: {e}")
             
@@ -4047,93 +4114,95 @@ def _setup_resilient_mode(bot):
         if len(transports) <= 1:
             return original_send_msg(account_id, chat_id, msg_data)
 
-        initial_addr = None
-        try:
-            initial_addr = bot.rpc.get_config(account_id, "configured_addr") or bot.rpc.get_config(account_id, "addr")
-        except Exception:
-            pass
+        with resilient_lock:
+            initial_addr = None
+            try:
+                initial_addr = bot.rpc.get_config(account_id, "configured_addr") or bot.rpc.get_config(account_id, "addr")
+            except Exception:
+                pass
 
-        # 1. Send the message normally via the current primary transport (non-blocking queueing)
-        try:
-            msg_id = original_send_msg(account_id, chat_id, msg_data)
-            bot.logger.info(f"Resilient send: initial msg queued with ID {msg_id} on transport {initial_addr}.")
-        except Exception as send_err:
-            bot.logger.error(f"Resilient send: failed to queue initial message: {send_err}")
-            return None
+            # 1. Send the message normally via the current primary transport (non-blocking queueing)
+            try:
+                msg_id = original_send_msg(account_id, chat_id, msg_data)
+                bot.logger.info(f"Resilient send: initial msg queued with ID {msg_id} on transport {initial_addr}.")
+            except Exception as send_err:
+                bot.logger.error(f"Resilient send: failed to queue initial message: {send_err}")
+                return None
 
         # Background worker to handle resending to other transports sequentially
         def bg_resend_worker(m_id, init_addr, t_list):
             bot.logger.info(f"Resilient send: starting background sender for msg {m_id}")
             with resilient_lock:
-                bot.logger.info(f"Resilient send bg: waiting for initial delivery of msg {m_id} on {init_addr}...")
-                start_time = time.time()
-                delivered = False
-                while time.time() - start_time < 10:
-                    try:
-                        msg_snapshot = bot.rpc.get_message(account_id, m_id)
-                        state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
-                        if state in (26, 28):
-                            bot.logger.info(f"Resilient send bg: initial msg {m_id} delivered successfully on {init_addr}.")
-                            delivered = True
-                            break
-                        if state == 24:
-                            bot.logger.warning(f"Resilient send bg: initial msg {m_id} failed on {init_addr}.")
-                            break
-                    except Exception as poll_err:
-                        bot.logger.debug(f"Resilient send bg initial poll error: {poll_err}")
-                    time.sleep(0.5)
+                try:
+                    bot.logger.info(f"Resilient send bg: waiting for initial delivery of msg {m_id} on {init_addr}...")
+                    start_time = time.time()
+                    delivered = False
+                    while time.time() - start_time < 10:
+                        try:
+                            msg_snapshot = bot.rpc.get_message(account_id, m_id)
+                            state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+                            if state in (26, 28):
+                                bot.logger.info(f"Resilient send bg: initial msg {m_id} delivered successfully on {init_addr}.")
+                                delivered = True
+                                break
+                            if state == 24:
+                                bot.logger.warning(f"Resilient send bg: initial msg {m_id} failed on {init_addr}.")
+                                break
+                        except Exception as poll_err:
+                            bot.logger.debug(f"Resilient send bg initial poll error: {poll_err}")
+                        time.sleep(0.5)
 
-                if not delivered:
-                    bot.logger.warning(f"Resilient send bg: initial msg {m_id} did not deliver on {init_addr} within timeout.")
+                    if not delivered:
+                        bot.logger.warning(f"Resilient send bg: initial msg {m_id} did not deliver on {init_addr} within timeout.")
 
-                # 2. Resend on all other transports
-                for t in t_list:
-                    t_addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
-                    if not t_addr or (init_addr and t_addr.lower() == init_addr.lower()):
-                        continue
+                    # 2. Resend on all other transports
+                    for t in t_list:
+                        t_addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
+                        if not t_addr or (init_addr and t_addr.lower() == init_addr.lower()):
+                            continue
 
-                    bot.logger.info(f"Resilient send bg: switching primary transport to {t_addr}")
-                    try:
-                        bot.rpc.set_config(account_id, "configured_addr", t_addr)
-                        time.sleep(1)
-                    except Exception as switch_err:
-                        bot.logger.error(f"Resilient send bg: failed to switch transport to {t_addr}: {switch_err}")
-                        continue
+                        bot.logger.info(f"Resilient send bg: switching primary transport to {t_addr}")
+                        try:
+                            bot.rpc.set_config(account_id, "configured_addr", t_addr)
+                            time.sleep(1)
+                        except Exception as switch_err:
+                            bot.logger.error(f"Resilient send bg: failed to switch transport to {t_addr}: {switch_err}")
+                            continue
 
-                    try:
-                        bot.logger.info(f"Resilient send bg: resending msg {m_id} on transport {t_addr}...")
-                        bot.rpc.resend_messages(account_id, [m_id])
+                        try:
+                            bot.logger.info(f"Resilient send bg: resending msg {m_id} on transport {t_addr}...")
+                            bot.rpc.resend_messages(account_id, [m_id])
 
-                        # Wait up to 10 seconds for the resent message to be delivered/failed
-                        start_time = time.time()
-                        delivered = False
-                        while time.time() - start_time < 10:
-                            try:
-                                msg_snapshot = bot.rpc.get_message(account_id, m_id)
-                                state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
-                                if state in (26, 28):
-                                    bot.logger.info(f"Resilient send bg: msg {m_id} delivered successfully on {t_addr}.")
-                                    delivered = True
-                                    break
-                                if state == 24:
-                                    bot.logger.warning(f"Resilient send bg: msg {m_id} failed on {t_addr}.")
-                                    break
-                            except Exception as poll_err:
-                                bot.logger.debug(f"Resilient send bg poll error: {poll_err}")
-                            time.sleep(0.5)
+                            # Wait up to 10 seconds for the resent message to be delivered/failed
+                            start_time = time.time()
+                            delivered = False
+                            while time.time() - start_time < 10:
+                                try:
+                                    msg_snapshot = bot.rpc.get_message(account_id, m_id)
+                                    state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+                                    if state in (26, 28):
+                                        bot.logger.info(f"Resilient send bg: msg {m_id} delivered successfully on {t_addr}.")
+                                        delivered = True
+                                        break
+                                    if state == 24:
+                                        bot.logger.warning(f"Resilient send bg: msg {m_id} failed on {t_addr}.")
+                                        break
+                                except Exception as poll_err:
+                                    bot.logger.debug(f"Resilient send bg poll error: {poll_err}")
+                                time.sleep(0.5)
 
-                        if not delivered:
-                            bot.logger.warning(f"Resilient send bg: msg {m_id} did not deliver on {t_addr} within timeout.")
-                    except Exception as resend_err:
-                        bot.logger.error(f"Resilient send bg: failed to resend message on transport {t_addr}: {resend_err}")
-
-                # 3. Restore the initial primary transport configuration
-                if init_addr:
-                    try:
-                        bot.logger.info(f"Resilient send bg: restoring initial primary transport to {init_addr}")
-                        bot.rpc.set_config(account_id, "configured_addr", init_addr)
-                    except Exception as restore_err:
-                        bot.logger.error(f"Resilient send bg: failed to restore transport to {init_addr}: {restore_err}")
+                            if not delivered:
+                                bot.logger.warning(f"Resilient send bg: msg {m_id} did not deliver on {t_addr} within timeout.")
+                        except Exception as resend_err:
+                            bot.logger.error(f"Resilient send bg: failed to resend message on transport {t_addr}: {resend_err}")
+                finally:
+                    # 3. Restore the initial primary transport configuration
+                    if init_addr:
+                        try:
+                            bot.logger.info(f"Resilient send bg: restoring initial primary transport to {init_addr}")
+                            bot.rpc.set_config(account_id, "configured_addr", init_addr)
+                        except Exception as restore_err:
+                            bot.logger.error(f"Resilient send bg: failed to restore transport to {init_addr}: {restore_err}")
 
         # Start the background thread for resilient sending
         threading.Thread(target=bg_resend_worker, args=(msg_id, initial_addr, transports), daemon=True).start()
@@ -4143,7 +4212,9 @@ def _setup_resilient_mode(bot):
     bot.rpc.send_msg = patched_send_msg
 
 
-_message_failover_attempts = {}
+import collections
+_message_failover_attempts: collections.OrderedDict[int, dict] = collections.OrderedDict()
+_message_failover_lock = threading.Lock()
 
 @dc_cli.on(events.RawEvent(events.EventType.MSG_FAILED))
 def on_msg_failed(bot, accid, event):
@@ -4159,43 +4230,38 @@ def on_msg_failed(bot, accid, event):
         return
 
     try:
-        global _message_failover_attempts
-        if len(_message_failover_attempts) > 1000:
-            _message_failover_attempts.clear()
+        with _message_failover_lock:
+            while len(_message_failover_attempts) > 1000:
+                _message_failover_attempts.popitem(last=False)
 
-        # Retrieve or initialize tracking state for this message
-        state = _message_failover_attempts.get(msg_id)
-        if state is None:
-            state = {'count': 0, 'transports': set()}
-            _message_failover_attempts[msg_id] = state
+            # Retrieve or initialize tracking state for this message
+            state = _message_failover_attempts.get(msg_id)
+            if state is None:
+                state = {'count': 0, 'transports': set()}
+                _message_failover_attempts[msg_id] = state
 
-        # Stop retrying if we reached the maximum attempt limit (e.g. 10 attempts)
-        if state['count'] >= 10:
-            return
+            # Stop retrying if we reached the maximum attempt limit (e.g. 10 attempts)
+            if state['count'] >= 10:
+                return
 
-        state['count'] += 1
+            state['count'] += 1
 
         # Retrieve message and verify it is indeed in failed state (state 24)
         try:
             msg_snapshot = bot.rpc.get_message(accid, msg_id)
-            msg_state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
-            if msg_state != 24:
+            if not msg_snapshot:
+                return
+            state_val = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+            if state_val != 24:
                 return
         except Exception:
             return
 
-        # Fetch chat details to include in logs (checking both snake_case and camelCase key fallbacks)
-        chat_id = None
-        if isinstance(msg_snapshot, dict):
-            chat_id = msg_snapshot.get('chat_id') or msg_snapshot.get('chatId')
-        else:
-            chat_id = getattr(msg_snapshot, 'chat_id', getattr(msg_snapshot, 'chatId', None))
-            
-        chat_name = "Unknown"
-
+        chat_id = msg_snapshot.get('chat_id') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'chat_id', None)
+        chat_name = f"Chat {chat_id}"
         if chat_id:
             try:
-                chat_info = bot.rpc.get_full_chat_by_id(accid, chat_id)
+                chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
                 if isinstance(chat_info, dict):
                     chat_name = chat_info.get('name', 'Unknown')
                 else:
@@ -4250,12 +4316,13 @@ def on_msg_failed(bot, accid, event):
             return
 
         # Check if we have already tried this transport for this message
-        if next_addr.lower() in state['transports']:
-            if len(state['transports']) >= len(transports):
-                bot.logger.warning(f"All available transports have been tried for message {msg_id}. Stopping failover.")
-                return
+        with _message_failover_lock:
+            if next_addr.lower() in state['transports']:
+                if len(state['transports']) >= len(transports):
+                    bot.logger.warning(f"All available transports have been tried for message {msg_id}. Stopping failover.")
+                    return
 
-        state['transports'].add(current_addr.lower())
+            state['transports'].add(current_addr.lower())
 
         # Calculate exponential backoff delay: 5, 10, 20, 40, 80, 160... seconds (max 5 minutes)
         delay = min(300, 5 * (2 ** (state['count'] - 1)))
@@ -4271,35 +4338,44 @@ def on_msg_failed(bot, accid, event):
             try:
                 bot.logger.info(f"Executing scheduled resend for message {msg_id} in chat '{chat_name}' (ID: {chat_id}) on transport {next_addr}...")
                 with resilient_lock:
-                    # Switch configured_addr to next transport temporarily
-                    bot.rpc.set_config(accid, "configured_addr", next_addr)
-                    time.sleep(1) # Give core a moment to reconfigure
-                    
-                    bot.rpc.resend_messages(accid, [msg_id])
-                    
-                    # Wait up to 10 seconds for the resent message to be delivered/failed
-                    start_time = time.time()
-                    delivered = False
-                    while time.time() - start_time < 10:
-                        try:
-                            raw_msg = bot.rpc.get_message(accid, msg_id)
-                            if raw_msg:
-                                from deltachat2 import AttrDict
-                                msg_snapshot = AttrDict(raw_msg)
-                                state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
-                                if state in (26, 28):
-                                    bot.logger.info(f"Resilient Failover bg: msg {msg_id} delivered successfully on {next_addr}.")
-                                    delivered = True
-                                    break
-                                if state == 24:
-                                    bot.logger.warning(f"Resilient Failover bg: msg {msg_id} failed on {next_addr}.")
-                                    break
-                        except Exception as poll_err:
-                            bot.logger.debug(f"Resilient Failover bg poll error: {poll_err}")
-                        time.sleep(0.5)
+                    try:
+                        # Switch configured_addr to next transport temporarily
+                        bot.rpc.set_config(accid, "configured_addr", next_addr)
+                        time.sleep(1) # Give core a moment to reconfigure
+                        
+                        bot.rpc.resend_messages(accid, [msg_id])
+                        
+                        # Wait up to 10 seconds for the resent message to be delivered/failed
+                        start_time = time.time()
+                        delivered = False
+                        while time.time() - start_time < 10:
+                            try:
+                                raw_msg = bot.rpc.get_message(accid, msg_id)
+                                if raw_msg:
+                                    from deltachat2 import AttrDict
+                                    msg_snapshot = AttrDict(raw_msg)
+                                    state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+                                    if state in (26, 28):
+                                        bot.logger.info(f"Resilient Failover bg: msg {msg_id} delivered successfully on {next_addr}.")
+                                        delivered = True
+                                        break
+                                    if state == 24:
+                                        bot.logger.warning(f"Resilient Failover bg: msg {msg_id} failed on {next_addr}.")
+                                        break
+                            except Exception as poll_err:
+                                bot.logger.debug(f"Resilient Failover bg poll error: {poll_err}")
+                            time.sleep(0.5)
 
-                    if not delivered:
-                        bot.logger.warning(f"Resilient Failover bg: msg {msg_id} did not deliver on {next_addr} within timeout.")
+                        if not delivered:
+                            bot.logger.warning(f"Resilient Failover bg: msg {msg_id} did not deliver on {next_addr} within timeout.")
+
+                    finally:
+                        # Always restore the initial primary transport address under the lock!
+                        try:
+                            bot.logger.info(f"Resilient Failover bg: restoring primary transport to {init_addr}")
+                            bot.rpc.set_config(accid, "configured_addr", init_addr)
+                        except Exception as restore_err:
+                            bot.logger.error(f"Resilient Failover bg: failed to restore transport to {init_addr}: {restore_err}")
 
             except Exception as resend_err:
                 bot.logger.warning(f"Error executing scheduled resend for message {msg_id} in chat '{chat_name}' (ID: {chat_id}): {resend_err}")
@@ -4307,16 +4383,11 @@ def on_msg_failed(bot, accid, event):
                 if "e2e encryption" in err_str or "encryption" in err_str:
                     bot.logger.warning(f"E2E encryption error detected during resend of msg {msg_id} in chat '{chat_name}'. Stopping further failovers.")
                     try:
-                        _message_failover_attempts[msg_id]['count'] = 10
+                        with _message_failover_lock:
+                            if msg_id in _message_failover_attempts:
+                                _message_failover_attempts[msg_id]['count'] = 10
                     except Exception:
                         pass
-            finally:
-                # Always restore the initial primary transport address!
-                try:
-                    bot.logger.info(f"Resilient Failover bg: restoring primary transport to {init_addr}")
-                    bot.rpc.set_config(accid, "configured_addr", init_addr)
-                except Exception as restore_err:
-                    bot.logger.error(f"Resilient Failover bg: failed to restore transport to {init_addr}: {restore_err}")
 
         import threading
         threading.Timer(delay, delayed_resend).start()

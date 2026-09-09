@@ -91,7 +91,8 @@ In group chats where multiple bots are present, you can address this bot specifi
    docker compose logs -f
    ```
 
-6. Add the bot in Delta Chat and send `/initadmin` to claim ownership.
+6. Add the bot in Delta Chat and send `/initadmin` in a private 1:1 chat to claim ownership.
+   *(Note: For security reasons, sensitive commands such as `/initadmin` and `/addtransport` can only be used in private 1:1 chats).*
 
 ## Cookies, OAuth Token & Proxy (Age-Restricted & Yandex Music Content)
 
