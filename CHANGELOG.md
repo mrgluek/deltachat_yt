@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.58] - 2026-09-11
+
+### Fixed
+- **Float Duration Formatting & Next Chunk Offer Bug**:
+  - Safely handle floating-point durations and time parameters in `_format_duration`, `_format_time_range`, and `_parse_single_time_str`, resolving `ValueError: Unknown format code 'd' for object of type 'float'`.
+  - Normalize extracted `duration` from yt-dlp metadata to integer across download and cache handlers.
+  - Require range parameters (`start_time` or `end_time`) before offering sequential video chunks in `_send_from_cache`, preventing spurious "Next chunk" buttons and duration formatting crashes on whole non-sliced video downloads (e.g. Twitter/X or other hosts with fractional second durations).
+
 ## [1.6.57] - 2026-09-09
 
 ### Fixed

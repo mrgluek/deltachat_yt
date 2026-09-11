@@ -297,6 +297,99 @@ class TestChapterSlicing(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chapters[2]["start_time"], 382)
         self.assertEqual(chapters[2]["end_time"], 3600)
 
+    def test_format_duration_floats_and_edge_cases(self):
+        """Test _format_duration handles floats, float strings, ints, None, and negative numbers."""
+        self.assertEqual(bot._format_duration(0), "00:00")
+        self.assertEqual(bot._format_duration(0.0), "00:00")
+        self.assertEqual(bot._format_duration(20.512), "00:21")
+        self.assertEqual(bot._format_duration("20.512"), "00:21")
+        self.assertEqual(bot._format_duration(612.34), "10:12")
+        self.assertEqual(bot._format_duration(3665.8), "1:01:06")
+        self.assertEqual(bot._format_duration(None), "?")
+        self.assertEqual(bot._format_duration(-5), "?")
+        self.assertEqual(bot._format_duration("invalid"), "?")
+
+    def test_format_time_range_floats(self):
+        """Test _format_time_range handles float start and end times without ValueError."""
+        self.assertEqual(bot._format_time_range(0.0, 20.512), "00:00-00:21")
+        self.assertEqual(bot._format_time_range(20.5, 620.5), "00:20-10:20")
+        self.assertEqual(bot._format_time_range(20.6, 620.6), "00:21-10:21")
+
+    def test_parse_single_time_str_floats(self):
+        """Test _parse_single_time_str parses float time strings into rounded integers."""
+        self.assertEqual(bot._parse_single_time_str("51.5"), 52)
+        self.assertEqual(bot._parse_single_time_str("51.2s"), 51)
+        self.assertEqual(bot._parse_single_time_str("1m20s"), 80)
+
+    @patch('bot._send')
+    @patch('bot._react')
+    @patch('bot._is_dc_admin', return_value=False)
+    async def test_send_from_cache_float_duration_no_chunking(self, mock_is_admin, mock_react, mock_send):
+        """Test sending a video with float duration (e.g. from Twitter/X) does not crash with ValueError and does not falsely suggest next chunk."""
+        tmpdir = tempfile.mkdtemp(prefix="cache_float_test_")
+        try:
+            fake_video = os.path.join(tmpdir, "test.mp4")
+            with open(fake_video, "wb") as f:
+                f.write(b"VIDEO_BYTES")
+
+            info = {
+                "title": "Short Twitter Clip",
+                "duration": 20.512,  # Float duration as returned by yt-dlp for Twitter/X
+            }
+            mock_bot = MagicMock()
+            mock_msg = MagicMock()
+            mock_msg.chat_id = 77
+            mock_msg.from_id = 480
+            mock_msg.id = 999
+
+            # Should complete without ValueError: Unknown format code 'd' for object of type 'float'
+            await bot._send_from_cache(
+                mock_bot, 1, mock_msg,
+                "https://x.com/Senya_Shitpost/status/2098121464465531386",
+                "video", fake_video, info=info
+            )
+
+            mock_send.assert_called_once()
+            caption = mock_send.call_args[0][3]
+            self.assertIn("📺 Short Twitter Clip (00:21,", caption)
+            self.assertNotIn("▶️ Next chunk", caption)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    @patch('bot._send')
+    @patch('bot._react')
+    @patch('bot._is_dc_admin', return_value=False)
+    async def test_send_from_cache_video_chunk_offers_next_chunk(self, mock_is_admin, mock_react, mock_send):
+        """Test sending a sliced video chunk offers the next chunk properly formatted."""
+        tmpdir = tempfile.mkdtemp(prefix="cache_chunk_test_")
+        try:
+            fake_video = os.path.join(tmpdir, "test.mp4")
+            with open(fake_video, "wb") as f:
+                f.write(b"VIDEO_BYTES")
+
+            info = {
+                "title": "Long Video",
+                "duration": 1500.0,
+            }
+            mock_bot = MagicMock()
+            mock_msg = MagicMock()
+            mock_msg.chat_id = 77
+            mock_msg.from_id = 480
+            mock_msg.id = 999
+
+            await bot._send_from_cache(
+                mock_bot, 1, mock_msg,
+                "https://youtu.be/3RBNboYUlVI?start=0&end=600",
+                "video", fake_video, info=info
+            )
+
+            mock_send.assert_called_once()
+            caption = mock_send.call_args[0][3]
+            self.assertIn("[00:00-10:00]", caption)
+            self.assertIn("▶️ Next chunk (10:00-20:00): /yt_3RBNboYUlVI_600_1200", caption)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

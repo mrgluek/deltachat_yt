@@ -22,7 +22,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.57"
+VERSION = "1.6.58"
 
 dc_cli = BotCli("ytbot")
 
@@ -202,19 +202,24 @@ def _parse_time_param(url: str) -> tuple[int | None, int | None]:
 
 
 def _parse_single_time_str(val: str) -> int | None:
-    """Parse a single time string like '51', '51s', '1m20s', '1h2m3s' into seconds."""
+    """Parse a single time string like '51', '51.5', '51s', '1m20s', '1h2m3s' into seconds."""
     val = val.strip().lower()
     if not val:
         return None
-    if val.isdigit():
-        return int(val)
-    if val.endswith('s') and val[:-1].isdigit():
-        return int(val[:-1])
+    try:
+        return int(round(float(val)))
+    except ValueError:
+        pass
+    if val.endswith('s'):
+        try:
+            return int(round(float(val[:-1])))
+        except ValueError:
+            pass
         
     total_seconds = 0
     pattern = re.compile(r'(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?')
     match = pattern.match(val)
-    if match:
+    if match and any(match.groups()):
         h, m, s = match.groups()
         if h: total_seconds += int(h) * 3600
         if m: total_seconds += int(m) * 60
@@ -652,17 +657,23 @@ def _extract_video_id(text: str) -> str | None:
     return None
 
 
-def _format_duration(seconds: int) -> str:
-    if seconds < 0:
+def _format_duration(seconds: int | float | None) -> str:
+    if seconds is None:
         return "?"
-    m, s = divmod(seconds, 60)
+    try:
+        sec = int(round(float(seconds)))
+    except (ValueError, TypeError):
+        return "?"
+    if sec < 0:
+        return "?"
+    m, s = divmod(sec, 60)
     h, m = divmod(m, 60)
     if h:
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
 
 
-def _format_time_range(start_sec: int, end_sec: int) -> str:
+def _format_time_range(start_sec: int | float | None, end_sec: int | float | None) -> str:
     return f"{_format_duration(start_sec)}-{_format_duration(end_sec)}"
 
 
@@ -2575,7 +2586,10 @@ async def _do_ytms(bot, accid, msg, video_id: str):
             _send(bot, accid, chat_id, f"❌ Could not fetch audio info: {error or 'Unknown error'}")
             return
         
-        duration = int(info.get("duration", 0))
+        try:
+            duration = int(round(float(info.get("duration") or 0)))
+        except (ValueError, TypeError):
+            duration = 0
         full_url = _extract_video_id(video_id) or video_id
         start_time, end_time = _parse_time_param(full_url)
         chapters = _get_video_chapters(info)
@@ -2591,8 +2605,8 @@ async def _do_ytms(bot, accid, msg, video_id: str):
             effective_duration = duration
             if duration > MAX_DURATION_AUDIO:
                 if chapters:
-                    s0 = chapters[0]["start_time"]
-                    e0 = chapters[0]["end_time"]
+                    s0 = int(round(float(chapters[0]["start_time"])))
+                    e0 = int(round(float(chapters[0]["end_time"])))
                     t0 = chapters[0]["title"]
                     clean_base = _get_base_video_id(video_id)
                     if clean_base.startswith("http://") or clean_base.startswith("https://"):
@@ -2699,8 +2713,8 @@ async def _do_ytms(bot, accid, msg, video_id: str):
 
         if chapter and ch_idx is not None and ch_idx + 1 < len(chapters):
             next_ch = chapters[ch_idx + 1]
-            next_s = next_ch["start_time"]
-            next_e = next_ch["end_time"]
+            next_s = int(round(float(next_ch["start_time"])))
+            next_e = int(round(float(next_ch["end_time"])))
             next_title = next_ch["title"]
             next_range_str = _format_time_range(next_s, next_e)
             
@@ -2829,7 +2843,10 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
             _send(bot, accid, chat_id, f"❌ Could not fetch video info: {error or 'Unknown error'}")
             return
         
-        duration = int(info.get("duration", 0))
+        try:
+            duration = int(round(float(info.get("duration") or 0)))
+        except (ValueError, TypeError):
+            duration = 0
     
         # 4. Wait for lock if already downloading same ID
         with get_download_lock(video_id + download_type):
@@ -2991,7 +3008,10 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
         info, _, _ = await _fetch_video_info_with_fallback(video_id)
 
     title = (info or {}).get("title", video_id)
-    total_duration = (info or {}).get("duration", 0)
+    try:
+        total_duration = int(round(float((info or {}).get("duration") or 0)))
+    except (ValueError, TypeError):
+        total_duration = 0
     duration = total_duration
     full_url = _extract_video_id(video_id) or video_id
     start_time, end_time = _parse_time_param(full_url)
@@ -3007,7 +3027,7 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
         elif end_time is not None:
             duration = max(0, end_time)
     filesize = os.path.getsize(filepath)
-    dur_str = _format_duration(int(duration)) if duration else "?"
+    dur_str = _format_duration(duration) if duration else "?"
     size_str = _format_size(filesize)
 
     ext = os.path.splitext(filepath)[1].lower().replace(".", "").upper()
@@ -3025,7 +3045,7 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
         chunk_e = end_time if end_time else (chunk_s + int(duration or 0))
         
         range_suffix = ""
-        if start_time is not None or end_time is not None or (total_duration and total_duration > 600):
+        if start_time is not None or end_time is not None:
             range_str = _format_time_range(chunk_s, chunk_e)
             range_suffix = f" [{range_str}]"
             
@@ -3038,15 +3058,15 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
         # Check if there is a next track or chunk to offer
         if chapter and ch_idx is not None and ch_idx + 1 < len(chapters):
             next_ch = chapters[ch_idx + 1]
-            next_s = next_ch["start_time"]
-            next_e = next_ch["end_time"]
+            next_s = int(round(float(next_ch["start_time"])))
+            next_e = int(round(float(next_ch["end_time"])))
             next_title = next_ch["title"]
             next_range_str = _format_time_range(next_s, next_e)
             next_cmd = f"/yt_{short_id}_{next_s}_{next_e}"
             caption += f"\n\n▶️ Next track: {next_title} ({next_range_str}): {next_cmd}"
-        elif total_duration and total_duration > chunk_e:
-            next_s = chunk_e
-            next_e = min(total_duration, next_s + 600)
+        elif (start_time is not None or end_time is not None) and total_duration and total_duration > chunk_e:
+            next_s = int(chunk_e)
+            next_e = int(min(total_duration, next_s + 600))
             next_range_str = _format_time_range(next_s, next_e)
             next_cmd = f"/yt_{short_id}_{next_s}_{next_e}"
             caption += f"\n\n▶️ Next chunk ({next_range_str}): {next_cmd}"
@@ -3056,8 +3076,8 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
             caption = f"🎵 {chapter['title']} [{range_str}] ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
             if ch_idx is not None and ch_idx + 1 < len(chapters):
                 next_ch = chapters[ch_idx + 1]
-                next_s = next_ch["start_time"]
-                next_e = next_ch["end_time"]
+                next_s = int(round(float(next_ch["start_time"])))
+                next_e = int(round(float(next_ch["end_time"])))
                 next_title = next_ch["title"]
                 next_range_str = _format_time_range(next_s, next_e)
                 next_cmd = f"/ytm_{short_id}_{next_s}_{next_e}"
@@ -3070,8 +3090,8 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
             if (start_time is not None or end_time is not None) and total_duration:
                 chunk_e = end_time if end_time else (start_time or 0) + int(duration or 0)
                 if total_duration > chunk_e:
-                    next_s = chunk_e
-                    next_e = min(total_duration, next_s + 600)
+                    next_s = int(chunk_e)
+                    next_e = int(min(total_duration, next_s + 600))
                     next_range_str = _format_time_range(next_s, next_e)
                     next_cmd = f"/ytm_{short_id}_{next_s}_{next_e}"
                     caption += f"\n\n▶️ Next chunk ({next_range_str}): {next_cmd}"
@@ -3803,7 +3823,10 @@ def _handle_link_info(bot, accid, msg, video_id: str):
 def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: str | None):
     """Helper to format and send the link info message."""
     title = info.get("title", "Unknown")
-    original_duration = int(info.get("duration", 0) or 0)
+    try:
+        original_duration = int(round(float(info.get("duration") or 0)))
+    except (ValueError, TypeError):
+        original_duration = 0
     duration = original_duration
     full_url = _extract_video_id(video_id) or video_id
     start_time, end_time = _parse_time_param(full_url)
@@ -3926,8 +3949,8 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
 
     if chapter:
         track_num = ch_idx + 1
-        c_start = chapter["start_time"]
-        c_end = chapter["end_time"]
+        c_start = int(round(float(chapter["start_time"])))
+        c_end = int(round(float(chapter["end_time"])))
         range_label = _format_time_range(c_start, c_end)
         vid_cmd = f"/yt_{short_id}_{c_start}_{c_end}"
         aud_cmd = f"/ytm_{short_id}_{c_start}_{c_end}"
@@ -3953,8 +3976,8 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
             ]
     elif start_time is None and end_time is None and chapters:
         c0 = chapters[0]
-        s0 = c0["start_time"]
-        e0 = c0["end_time"]
+        s0 = int(round(float(c0["start_time"])))
+        e0 = int(round(float(c0["end_time"])))
         t0 = c0["title"]
         ch_dur = e0 - s0
         c0_size_str = audio_size_str
@@ -3990,8 +4013,8 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
     else:
         aud_cmd = f"/ytm_{short_id}"
         if original_duration > 600:
-            chunk_s = start_time or 0
-            chunk_e = min(original_duration, chunk_s + 600)
+            chunk_s = int(start_time or 0)
+            chunk_e = int(min(original_duration, chunk_s + 600))
             part_num = (chunk_s // 600) + 1
             range_label = _format_time_range(chunk_s, chunk_e)
             vid_cmd = f"/yt_{short_id}_{chunk_s}_{chunk_e}"
