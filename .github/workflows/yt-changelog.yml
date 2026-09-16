@@ -1,5 +1,9 @@
 name: Notify YT Bot Changelog
-on: [push]
+on:
+  push:
+    branches:
+      - main
+      - master
 
 jobs:
   notify:
