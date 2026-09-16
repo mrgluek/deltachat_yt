@@ -1,7 +1,7 @@
 deltabot-cli==8.1.2
 deltachat2[full]<1.0.0
-yt-dlp[default]
-qrcode
-curl-cffi
-yandex-music
-mutagen>=1.47.0
+yt-dlp[default]>=2024.8.6
+qrcode>=7.4.2,<8.0.0
+curl-cffi>=0.7.0,<1.0.0
+yandex-music>=2.1.1,<3.0.0
+mutagen>=1.47.0,<2.0.0

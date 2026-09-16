@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.59] - 2026-09-16
+
+### Security
+- **SSRF & DNS Rebinding Hardening (`is_safe_url`)**:
+  - Added `is_safe_url()` with full scheme checks, IP address validation, local domain suffix blocking, and DNS resolution checks to prevent probing localhost, private networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback, cloud metadata (`169.254.169.254`), or reserved addresses.
+  - Tightened PeerTube URL pattern in `SUPPORTED_URL_RE` to require a valid domain with a public TLD rather than allowing arbitrary local IP/host targets.
+  - Added URL safety validation in `_handle_link_info`, `_do_download`, and `_download_thumbnail`.
+  - Enforced a 5MB read limit on thumbnail downloads in `_download_thumbnail` to prevent unbounded memory usage.
+- **Dependency Pinning**:
+  - Pinned `yt-dlp[default]>=2024.8.6`, `qrcode>=7.4.2,<8.0.0`, `curl-cffi>=0.7.0,<1.0.0`, `yandex-music>=2.1.1,<3.0.0`, and `mutagen>=1.47.0,<2.0.0` in `requirements.txt`.
+
 ## [1.6.58] - 2026-09-11
 
 ### Fixed

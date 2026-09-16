@@ -12,7 +12,9 @@ import contextlib
 import urllib.request
 import urllib.parse
 import hashlib
+import ipaddress
 import secrets
+import socket
 
 from deltachat2 import events, MsgData
 from deltabot_cli import BotCli
@@ -22,7 +24,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.58"
+VERSION = "1.6.59"
 
 dc_cli = BotCli("ytbot")
 
@@ -129,9 +131,53 @@ SUPPORTED_URL_RE = re.compile(
     r'imgur\.com/|'
     r'facebook\.com/|'
     r'music\.yandex\.(?:ru|com|by|kz)/|'
-    r'[^/]+/w/'  # PeerTube
+    r'[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/w/'  # PeerTube (valid hostname with TLD required)
     r')[^\s]+'
 )
+
+def is_safe_url(url: str) -> bool:
+    """Validate that a URL is a safe public HTTP/HTTPS URL and not pointing to local/private/cloud metadata endpoints."""
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if parsed.scheme.lower() not in ("http", "https"):
+            return False
+        host = parsed.hostname
+        if not host:
+            return False
+        host = host.lower().strip()
+        if host in ("localhost", "0.0.0.0", "127.0.0.1", "::1", "169.254.169.254", "metadata.google.internal", "instance-data"):
+            return False
+        if host.endswith((".local", ".lan", ".home", ".internal", ".localdomain", ".test", ".invalid", ".localhost")):
+            return False
+        try:
+            ip_str = host.strip("[]")
+            ip = ipaddress.ip_address(ip_str)
+            if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+                ip = ip.ipv4_mapped
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+                return False
+            return True
+        except ValueError:
+            pass
+        # DNS resolution check (prevent DNS rebinding)
+        try:
+            addr_info = socket.getaddrinfo(host, None)
+            for _, _, _, _, sockaddr in addr_info:
+                ip_str = sockaddr[0]
+                ip_obj = ipaddress.ip_address(ip_str)
+                if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
+                    ip_obj = ip_obj.ipv4_mapped
+                if (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or
+                        ip_obj.is_reserved or ip_obj.is_multicast or ip_obj.is_unspecified):
+                    return False
+        except (socket.gaierror, socket.herror, OSError):
+            pass
+        return True
+    except Exception:
+        return False
 
 YANDEX_PREVIEW_RE = re.compile(
     r'https?://(?:www\.)?yandex\.(?:ru|by|kz|com|ua)/video/preview/\d+'
@@ -2800,6 +2846,12 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
     if download_type == "video" and AUDIO_ONLY_URL_RE.search(video_id):
         download_type = "audio"
 
+    if video_id.startswith(("http://", "https://")) and not is_safe_url(video_id):
+        logger.warning(f"Blocked unsafe/internal URL in _do_download: {video_id}")
+        _react(bot, accid, req_msg_id, "❌")
+        _send(bot, accid, chat_id, "❌ Cannot download internal, local, or private network targets.")
+        return
+
     logger.info(f"Starting _do_download for {video_id} (type={download_type}) in chat {chat_id}")
     
     process_key = f"{chat_id}_{video_id}_{download_type}"
@@ -3753,12 +3805,15 @@ def _download_thumbnail(thumbnail_url: str, safe_id: str) -> str | None:
     """Download thumbnail image with proper User-Agent and save to THUMB_CACHE_DIR."""
     if not thumbnail_url or not (thumbnail_url.startswith("http://") or thumbnail_url.startswith("https://")):
         return None
+    if not is_safe_url(thumbnail_url):
+        logger.warning(f"Blocked unsafe thumbnail URL: {thumbnail_url}")
+        return None
     try:
         os.makedirs(THUMB_CACHE_DIR, exist_ok=True)
         persist_thumb = os.path.join(THUMB_CACHE_DIR, f"{safe_id}.jpg")
         req = urllib.request.Request(thumbnail_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
         with urllib.request.urlopen(req, timeout=10) as r:
-            data = r.read()
+            data = r.read(5 * 1024 * 1024)
         if data:
             with open(persist_thumb, 'wb') as f:
                 f.write(data)
@@ -3770,6 +3825,12 @@ def _download_thumbnail(thumbnail_url: str, safe_id: str) -> str | None:
 
 def _handle_link_info(bot, accid, msg, video_id: str):
     """Fetch video info and reply with download commands (with caching)."""
+    if video_id.startswith(("http://", "https://")) and not is_safe_url(video_id):
+        logger.warning(f"Blocked unsafe/internal URL in _handle_link_info: {video_id}")
+        _react(bot, accid, msg.id, "❌")
+        _send(bot, accid, msg.chat_id, "❌ Cannot download internal, local, or private network targets.")
+        return
+
     safe_id = _get_cache_id(video_id)
     # 1. Check Cache
     cached = database.get_cached_info(video_id)
