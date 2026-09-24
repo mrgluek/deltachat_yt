@@ -57,6 +57,8 @@ In group chats where multiple bots are present, you can address this bot specifi
 - `/help@yt`
 - `/stats@yt`
 
+A plain `/help` sent in a group chat is answered in a private 1:1 chat with the sender, so several bots don't flood the group with help texts. Use `/help@yt` to show the help in the group itself.
+
 ## Deployment
 
 ### Prerequisites

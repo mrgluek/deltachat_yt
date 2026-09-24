@@ -24,7 +24,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.59"
+VERSION = "1.6.60"
 
 dc_cli = BotCli("ytbot")
 
@@ -3276,12 +3276,25 @@ def ytms_command(bot, accid, event):
     t.start()
 
 
+HELP_PRIVATE_NOTE = "\n\n💬 Sent privately because you asked in a group. Use /help@yt there to show it to everyone."
+
+def _get_help_chat_id(bot, accid, msg):
+    """Plain /help in a group is answered privately to the sender so several bots
+    don't flood the group; /help@<bot> is still answered in the group itself."""
+    cmd = msg.text.split(maxsplit=1)[0] if msg.text else ""
+    if "@" in cmd or _is_private_chat(bot, accid, msg.chat_id):
+        return msg.chat_id
+    return bot.rpc.create_chat_by_contact_id(accid, msg.from_id)
+
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
     msg = event.msg
     logger.info(f"Received /help command in chat {msg.chat_id} from {msg.from_id}")
     help_text = _get_help_text(bot, accid, msg.from_id)
-    _send(bot, accid, msg.chat_id, help_text)
+    chat_id = _get_help_chat_id(bot, accid, msg)
+    if chat_id != msg.chat_id:
+        help_text += HELP_PRIVATE_NOTE
+    _send(bot, accid, chat_id, help_text)
 
 
 @dc_cli.on(events.NewMessage(command="/transports"))
@@ -4617,7 +4630,8 @@ def setup_custom_command_parser(bot, allowed_prefixes):
         else:
             original_parse_command(accid, event)
             
-            if event.command in ("/help", "/stats"):
+            # /help is not suppressed: plain /help in a group is answered privately (see help_command)
+            if event.command == "/stats":
                 try:
                     chat = bot.rpc.get_chat(accid, event.msg.chat_id)
                     is_group = getattr(chat, "chat_type", "Single") != "Single"
