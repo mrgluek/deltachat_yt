@@ -24,7 +24,7 @@ import database
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.6.60"
+VERSION = "1.6.61"
 
 dc_cli = BotCli("ytbot")
 
