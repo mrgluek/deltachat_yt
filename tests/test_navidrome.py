@@ -59,7 +59,7 @@ class TestNavidromeIntegration(unittest.TestCase):
 
     def test_version_bumped(self):
         """Test bot.VERSION is 1.6.61."""
-        self.assertEqual(bot.VERSION, "1.6.61")
+        self.assertEqual(bot.VERSION, "1.7.0")
 
     def test_sanitize_filename(self):
         """Test filename sanitization for various edge cases and illegal characters."""

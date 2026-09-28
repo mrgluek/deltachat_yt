@@ -53,14 +53,6 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(database.get_admin_fingerprint(), "A1B2C3D4E5F6")
 
     # ── Resilient Mode Flag Tests ───────────────────────────────────────────
-    def test_resilient_flag_toggle(self):
-        self.assertIsNone(database.get_config("resilient"))
-        database.set_config("resilient", "1")
-        self.assertEqual(database.get_config("resilient"), "1")
-        database.set_config("resilient", "0")
-        self.assertEqual(database.get_config("resilient"), "0")
-
-    # ── Downloads & Stats Tests ─────────────────────────────────────────────
     def test_downloads_and_get_stats(self):
         database.add_download(10, 100, "vid1", "Title 1", 120, "video", 5000000)
         database.add_download(10, 100, "vid2", "Title 2", 180, "audio", 2000000)

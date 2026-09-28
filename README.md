@@ -48,8 +48,8 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 - `/transports` - Show configured mail relays & stats (Admin only).
 - `/addtransport` - Add a backup mail relay (Admin only).
 - `/rmtransport <addr>` - Remove a mail relay (Admin only).
-- `/setprimary <addr>` - Switch the primary mail relay (Admin only).
-- `/resilient` - Toggle resilient sending mode across all relays (Admin only).
+
+Relay selection and failover are handled by the Delta Chat core (2.61+): it sends via the newest relay first and falls back to the next one if a relay is unreachable. `/transports` lists relays in that order. The former `/setprimary` and `/resilient` commands are deprecated and only reply with this explanation.
 
 ### Target-Specific Commands in Group Chats
 
