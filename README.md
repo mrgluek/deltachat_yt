@@ -45,11 +45,11 @@ A simple Delta Chat bot that downloads YouTube videos and audio via `yt-dlp`. De
 - `/help` - Show help message.
 - `/initadmin` - Claim bot ownership (first time setup).
 - `/donate` - Support the project.
-- `/transports` - Show configured mail relays & stats (Admin only).
+- `/transports` - Show mail relays: relay used for sending, send queue, incoming status and storage (Admin only).
 - `/addtransport` - Add a backup mail relay (Admin only).
 - `/rmtransport <addr>` - Remove a mail relay (Admin only).
 
-Relay selection and failover are handled by the Delta Chat core (2.61+): it sends via the newest relay first and falls back to the next one if a relay is unreachable. `/transports` lists relays in that order. The former `/setprimary` and `/resilient` commands are deprecated and only reply with this explanation.
+Relay selection and failover are handled by the Delta Chat core (2.61+): it keeps sending through the relay that last worked and moves to the next one only if it cannot connect, so the relay used for sending can differ from the account's main address. `/transports` shows which relay that is, the core's send queue, and per relay the incoming status, the last received message and mailbox storage. The former `/setprimary` and `/resilient` commands are deprecated and only reply with this explanation.
 
 ### Target-Specific Commands in Group Chats
 
