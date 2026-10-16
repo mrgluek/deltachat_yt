@@ -235,3 +235,7 @@ If you find this bot useful, consider supporting the developer:
 
 - [Ko-fi](https://ko-fi.com/gluek)
 - [Tribute](https://web.tribute.tg/d/IWb)
+
+## License
+
+MIT, see [LICENSE](LICENSE).

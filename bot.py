@@ -25,7 +25,7 @@ import transports_view
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 
 dc_cli = BotCli("ytbot")
 
