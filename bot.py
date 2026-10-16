@@ -26,7 +26,7 @@ import transports_view
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.9.1"
+VERSION = "1.10.0"
 
 dc_cli = BotCli("ytbot")
 
@@ -482,6 +482,45 @@ def _split_range(start: int, end: int, max_len: int = VIDEO_PART_MAX_SECONDS) ->
     n = math.ceil(total / max_len)
     bounds = [start + round(i * total / n) for i in range(n + 1)]
     return list(zip(bounds[:-1], bounds[1:]))
+
+
+# Audio longer than MAX_DURATION_AUDIO without chapters is offered in parts on
+# the same 10-minute grid as video chunks; each part is a stream copy (~10 MB).
+AUDIO_PART_SECONDS = 600
+
+
+def _audio_parts(total_duration: int) -> list[tuple[int, int]]:
+    """10-minute parts of an audio too long to send whole, or [] if it fits whole.
+
+    A tail shorter than a minute is merged into the previous part.
+    """
+    if not total_duration or total_duration <= MAX_DURATION_AUDIO:
+        return []
+    parts = [(s, min(s + AUDIO_PART_SECONDS, total_duration)) for s in range(0, total_duration, AUDIO_PART_SECONDS)]
+    if len(parts) > 1 and parts[-1][1] - parts[-1][0] < 60:
+        parts[-2] = (parts[-2][0], parts[-1][1])
+        parts.pop()
+    return parts
+
+
+def _find_audio_part(total_duration: int, start_time: int | None, end_time: int | None) -> tuple[int | None, list[tuple[int, int]]]:
+    """(index, parts) if [start_time, end_time] is one of the audio parts, else (None, parts)."""
+    parts = _audio_parts(total_duration)
+    if start_time is None:
+        return None, parts
+    for i, (s, e) in enumerate(parts):
+        if abs(s - start_time) <= 2 and (end_time is None or abs(e - end_time) <= 2):
+            return i, parts
+    return None, parts
+
+
+def _audio_part_names(info: dict, part_idx: int, total_parts: int) -> tuple[str, str, str]:
+    """(title, album, artist) for one part of a long recording saved to Navidrome."""
+    video_title = info.get("orig_title") or info.get("video_title") or info.get("title") or "Unknown"
+    artist = info.get("artist") or info.get("uploader") or info.get("channel") or info.get("creator") or "Unknown Artist"
+    width = len(str(total_parts))
+    title = f"{video_title} (Part {part_idx + 1:0{width}d}/{total_parts})"
+    return title, video_title, artist
 
 
 def _chapter_bounds(chapter: dict) -> tuple[int, int]:
@@ -2555,7 +2594,7 @@ def _check_navidrome_status() -> tuple[bool, str]:
         return False, f"Connection failed ({e})"
 
 
-def _save_to_navidrome(filepath: str, info: dict, music_dir: str, video_id: str = None) -> tuple[str | None, str | None, str | None]:
+def _save_to_navidrome(filepath: str, info: dict, music_dir: str, video_id: str = None, total_duration: int = 0) -> tuple[str | None, str | None, str | None]:
     """
     Save downloaded audio file (and companion .lrc file if present) into Navidrome music directory organized as Artist/Album/Title.ext.
     Returns (destination_audio_path, destination_lrc_path, error_message).
@@ -2567,8 +2606,21 @@ def _save_to_navidrome(filepath: str, info: dict, music_dir: str, video_id: str 
         full_url = _extract_video_id(video_id) if video_id else ""
         start_time, end_time = _parse_time_param(full_url) if full_url else (None, None)
         ch_idx, chapter = _find_chapter(chapters, start_time, end_time)
+        if not total_duration:
+            # The caller passes the full length; info from a section download may not have it
+            try:
+                total_duration = int(round(float(info.get("duration") or 0)))
+            except (ValueError, TypeError):
+                total_duration = 0
+        part_idx, audio_parts = (None, []) if chapter else _find_audio_part(total_duration, start_time, end_time)
 
-        if chapter:
+        dest_prefix = ""
+        if part_idx is not None:
+            # Parts of one long recording: an album of numbered tracks, so files
+            # don't overwrite each other and sort in order
+            title, album, artist = _audio_part_names(info, part_idx, len(audio_parts))
+            dest_prefix = f"{part_idx + 1:02d} - "
+        elif chapter:
             orig_title = info.get("orig_title") or info.get("video_title") or (info.get("title") if info.get("title") != chapter.get("title") else "Singles")
             if info.get("album") and info["album"] != chapter.get("title"):
                 album = info["album"]
@@ -2598,7 +2650,8 @@ def _save_to_navidrome(filepath: str, info: dict, music_dir: str, video_id: str 
         target_dir = os.path.join(music_dir, artist_clean, album_clean)
         os.makedirs(target_dir, exist_ok=True)
         
-        dest_filename = f"{title_clean}{ext}"
+        # Parts: "03 - Album.opus" (the "/" in "Part 03/10" would become "_" in a filename)
+        dest_filename = f"{dest_prefix}{album_clean}{ext}" if dest_prefix else f"{title_clean}{ext}"
         dest_path = os.path.join(target_dir, dest_filename)
         
         shutil.copy2(filepath, dest_path)
@@ -2610,7 +2663,10 @@ def _save_to_navidrome(filepath: str, info: dict, music_dir: str, video_id: str 
         tag_info["track"] = title
         tag_info["artist"] = artist
         tag_info["album"] = album
-        if chapter and ch_idx is not None:
+        if part_idx is not None:
+            tag_info["track_number"] = part_idx + 1
+            tag_info["total_tracks"] = len(audio_parts)
+        elif chapter and ch_idx is not None:
             tag_info["track_number"] = ch_idx + 1
             tag_info["total_tracks"] = len(chapters)
         _tag_audio_file(dest_path, tag_info, webpage_url=_make_yt_url(video_id) if video_id else None)
@@ -2719,10 +2775,17 @@ async def _do_ytms(bot, accid, msg, video_id: str):
                     _react(bot, accid, req_msg_id, "ℹ️")
                     _send(bot, accid, chat_id, f"⏱ Total audio duration ({_format_duration(duration)}) exceeds {MAX_DURATION_AUDIO // 60} minutes.\n\nSave individual tracks from tracklist:\n💾 Track 1: {t0} ({_format_time_range(s0, e0)}): /ytms_{short_id}_{s0}_{e0}")
                     return
-                else:
+                audio_parts = _audio_parts(duration)
+                if not audio_parts:
                     _react(bot, accid, req_msg_id, "❌")
                     _send(bot, accid, chat_id, f"❌ Audio duration ({_format_duration(duration)}) exceeds maximum allowed ({MAX_DURATION_AUDIO // 60} minutes).")
                     return
+                # Save part 1; the reply links the next part
+                start_time, end_time = audio_parts[0]
+                base_url = _make_yt_url(_get_base_video_id(video_id))
+                sep = "&" if "?" in base_url else "?"
+                video_id = f"{base_url}{sep}start={start_time}&end={end_time}"
+                effective_duration = end_time - start_time
 
         # 2. Check if already in cache, or download
         cache_path = _find_cached_file(video_id, "audio")
@@ -2768,7 +2831,7 @@ async def _do_ytms(bot, accid, msg, video_id: str):
 
         # 3. Save to Navidrome directory
         _react(bot, accid, req_msg_id, "⌛")
-        dest_path, dest_lrc, save_err = _save_to_navidrome(filepath, info, music_dir, video_id=video_id)
+        dest_path, dest_lrc, save_err = _save_to_navidrome(filepath, info, music_dir, video_id=video_id, total_duration=duration)
         if save_err:
             _react(bot, accid, req_msg_id, "❌")
             _send(bot, accid, chat_id, f"❌ Failed to save to Navidrome directory: {save_err}")
@@ -2780,7 +2843,10 @@ async def _do_ytms(bot, accid, msg, video_id: str):
         )
 
         # 5. Format response message
-        if chapter:
+        part_idx, audio_parts = (None, []) if chapter else _find_audio_part(duration, start_time, end_time)
+        if part_idx is not None:
+            title, album, artist = _audio_part_names(info, part_idx, len(audio_parts))
+        elif chapter:
             title = chapter.get("title") or info.get("track") or info.get("title") or video_id
             album = info.get("album") or info.get("title") or "Singles"
             artist = info.get("artist") or info.get("uploader") or info.get("channel") or info.get("creator") or "Unknown Artist"
@@ -2827,6 +2893,15 @@ async def _do_ytms(bot, accid, msg, video_id: str):
                 short_id = clean_base
             
             caption += f"\n\n▶️ Next track: {next_title} ({next_range_str}): /ytms_{short_id}_{next_s}_{next_e}"
+            caption += f"\n💿 Download audio: /ytm_{short_id}_{next_s}_{next_e}"
+        elif part_idx is not None and part_idx + 1 < len(audio_parts):
+            next_s, next_e = audio_parts[part_idx + 1]
+            if clean_base.startswith("http://") or clean_base.startswith("https://"):
+                short_id = _get_cache_id(clean_base)
+                database.add_url_mapping(short_id, clean_base)
+            else:
+                short_id = clean_base
+            caption += f"\n\n▶️ Next part {part_idx + 2}/{len(audio_parts)} ({_format_time_range(next_s, next_e)}): /ytms_{short_id}_{next_s}_{next_e}"
             caption += f"\n💿 Download audio: /ytm_{short_id}_{next_s}_{next_e}"
 
         _send(bot, accid, chat_id, caption)
@@ -3209,8 +3284,18 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
                     nav_cmd = f"/ytms_{short_id}_{next_s}_{next_e}"
                     caption += f"\n💾 Save to Navidrome: {nav_cmd}"
         else:
-            caption = f"🎵 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
-            if (start_time is not None or end_time is not None) and total_duration:
+            part_idx, audio_parts = _find_audio_part(total_duration, start_time, end_time)
+            if part_idx is not None:
+                a_s, a_e = audio_parts[part_idx]
+                caption = f"🎵 {title} - Part {part_idx + 1}/{len(audio_parts)} [{_format_time_range(a_s, a_e)}] ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
+                if part_idx + 1 < len(audio_parts):
+                    next_s, next_e = audio_parts[part_idx + 1]
+                    caption += f"\n\n▶️ Next part {part_idx + 2}/{len(audio_parts)} ({_format_time_range(next_s, next_e)}): /ytm_{short_id}_{next_s}_{next_e}"
+                    if is_admin:
+                        caption += f"\n💾 Save to Navidrome: /ytms_{short_id}_{next_s}_{next_e}"
+            else:
+                caption = f"🎵 {title} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
+            if part_idx is None and (start_time is not None or end_time is not None) and total_duration:
                 chunk_e = end_time if end_time else (start_time or 0) + int(duration or 0)
                 if total_duration > chunk_e:
                     next_s = int(chunk_e)
@@ -4081,6 +4166,14 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
         can_audio = duration <= MAX_DURATION_AUDIO
         audio_btn = f"💿 {audio_fmt} ({audio_size_str}) {aud_cmd}" if can_audio else f"💿 Too long (> {MAX_DURATION_AUDIO // 60}m)"
         nav_btn = f"💾 /ytms_{short_id}{range_suffix}" if is_admin and can_audio else ""
+        audio_parts = [] if has_range else _audio_parts(original_duration)
+        if audio_parts:
+            # Too long to send whole: offer the audio in 10-minute parts, part 1 now
+            a_s, a_e = audio_parts[0]
+            part_mb = (a_e - a_s) * 128 / 8192
+            aud_cmd = f"/ytm_{short_id}_{a_s}_{a_e}"
+            audio_btn = f"💿 Part 1/{len(audio_parts)} ({_format_time_range(a_s, a_e)}, {audio_fmt}, ~{part_mb:.1f} MB) {aud_cmd}"
+            nav_btn = f"💾 /ytms_{short_id}_{a_s}_{a_e}" if is_admin else ""
         if has_range:
             dur_str = f"{_format_time_range(sec_s, sec_e)}, {dur_str}"
 

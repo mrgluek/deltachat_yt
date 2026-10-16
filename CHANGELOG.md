@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.10.0] - 2026-10-16
+- **Long Audio in 10-Minute Parts**: Videos without chapters that are longer than 60 minutes no longer show "💿 Too long" for audio. The menu offers `💿 Part 1/N` (`/ytm_ID_0_600`), on the same 10-minute grid as video chunks; each part is stream-copied, so the original quality is kept (~10 MB per part). A tail shorter than a minute is merged into the last part. Each delivered part's caption shows `Part k/N` and links the next part (plus `/ytms` for admins). Audio up to 60 minutes is still sent as one file.
+- **`/ytms` Saves Long Recordings Part by Part**: `/ytms_ID` on a long video without chapters now saves part 1 instead of refusing, and the reply links `/ytms` for the next part.
+- **Part-Aware Navidrome Naming**: Parts are saved as one album (album = video title, artist = channel) with titles like `Title (Part 03/10)`, track numbers `3/10` and file names `03 - Title.opus`. Before, parts of a video without chapters would all get the same file name and overwrite each other.
+
 ## [1.9.1] - 2026-10-16
 - **Time Range From the Link Is Kept in the Menu**: For a link with a time range (e.g. `?t=34-41`) on a video shorter than 10 minutes, the menu showed the right duration but offered `/yt_ID` and `/ytm_ID` for the whole video. The video, audio and Navidrome commands now carry the range (`/yt_ID_34_41`), and the header shows it. For longer videos the end time is no longer replaced by "start + 10 minutes"; ranges over 10 minutes are offered as video in 10-minute chunks.
 
