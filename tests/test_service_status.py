@@ -57,10 +57,6 @@ class TestServiceStatusDiagnostics(unittest.TestCase):
                 except OSError:
                     pass
 
-    def test_version_bumped(self):
-        """Test bot.VERSION is 1.6.61."""
-        self.assertEqual(bot.VERSION, "1.7.0")
-
     def test_sanitize_cookies_file_in_place(self):
         """Test _sanitize_cookies_file rewrites invalid cookie file on disk to valid Netscape format."""
         raw_cookie = "vk.com\tTRUE\t/\tTRUE\t1810460599\tremixlang\t3\n.youtube.com\tFALSE\t/\tTRUE\t1893456000\tLOGIN_INFO\ttoken123\n"

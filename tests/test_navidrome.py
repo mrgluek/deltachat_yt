@@ -57,10 +57,6 @@ class TestNavidromeIntegration(unittest.TestCase):
                 except OSError:
                     pass
 
-    def test_version_bumped(self):
-        """Test bot.VERSION is 1.6.61."""
-        self.assertEqual(bot.VERSION, "1.7.0")
-
     def test_sanitize_filename(self):
         """Test filename sanitization for various edge cases and illegal characters."""
         self.assertEqual(bot._sanitize_filename("Valid Name"), "Valid Name")

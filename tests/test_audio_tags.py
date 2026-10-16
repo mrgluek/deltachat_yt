@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -52,10 +53,14 @@ class TestYTBotAudioTags(unittest.IsolatedAsyncioTestCase):
                 except OSError:
                     pass
 
-    def test_version_constant(self):
-        """Test that bot.VERSION constant is set."""
-        self.assertTrue(hasattr(bot, "VERSION"))
-        self.assertEqual(bot.VERSION, "1.7.0")
+    def test_version_matches_changelog(self):
+        """bot.VERSION must equal the newest `## [X.Y.Z]` heading in CHANGELOG.md."""
+        changelog = os.path.join(os.path.dirname(__file__), "..", "CHANGELOG.md")
+        with open(changelog, encoding="utf-8") as f:
+            # First match is the newest release, since entries are prepended
+            match = re.search(r"^## \[(\d+\.\d+\.\d+)\]", f.read(), re.MULTILINE)
+        self.assertIsNotNone(match, "no '## [X.Y.Z]' heading found in CHANGELOG.md")
+        self.assertEqual(bot.VERSION, match.group(1))
 
     def test_database_config_roundtrip(self):
         """Test set_config and get_config in database."""
