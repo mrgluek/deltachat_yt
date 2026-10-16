@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.0] - 2026-10-16
+- **Fixed Lower-Resolution Retry for Tracks and Chunks**: When a video section (`/yt_ID_start_end`) came out over 50 MB, the bot retried at 240p and 144p, but the format selector always picked YouTube's 360p MP4 (format 18) first, so every retry downloaded the same file and failed with "even at lower resolutions". Format 18 is now only preferred at 360p and above; the 240p/144p retries pick a stream of that height.
+- **Long Chapters Offered in Parts for Video**: Chapters longer than 10 minutes are offered as video in equal parts of at most 10 minutes (e.g. a 13:27 track becomes two ~6:44 parts). The link menu shows `Track N part 1/2`, each delivered part names itself in the caption, and `▶️ Next part` / `▶️ Next track` links lead through all parts and tracks. Audio (`/ytm`) still downloads the whole chapter, since Opus is small.
+- **Size-Limit Error Offers Halves**: If a video section still exceeds 50 MB at the lowest resolution, the error now links its two halves and the audio of the same section instead of the whole video's audio.
+
 ## [1.8.1] - 2026-10-16
 - **MIT License**: the project is now licensed under MIT (`LICENSE`).
 

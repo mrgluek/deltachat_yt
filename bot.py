@@ -2,6 +2,7 @@ import asyncio
 import collections
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -25,7 +26,7 @@ import transports_view
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.8.1"
+VERSION = "1.9.0"
 
 dc_cli = BotCli("ytbot")
 
@@ -466,6 +467,60 @@ def _find_chapter(chapters: list[dict], start_time: int | None, end_time: int | 
         if st <= start_time < et:
             return idx, c
     return None, None
+
+
+# Video chapters longer than this are offered in equal parts: at 360p a section
+# costs ~3.8 MB/min, so 10 minutes keeps each part well under MAX_FILESIZE_MB.
+VIDEO_PART_MAX_SECONDS = 600
+
+
+def _split_range(start: int, end: int, max_len: int = VIDEO_PART_MAX_SECONDS) -> list[tuple[int, int]]:
+    """Split [start, end) into the fewest equal parts no longer than max_len seconds."""
+    total = end - start
+    if total <= max_len:
+        return [(start, end)]
+    n = math.ceil(total / max_len)
+    bounds = [start + round(i * total / n) for i in range(n + 1)]
+    return list(zip(bounds[:-1], bounds[1:]))
+
+
+def _chapter_bounds(chapter: dict) -> tuple[int, int]:
+    return int(round(float(chapter["start_time"]))), int(round(float(chapter["end_time"])))
+
+
+def _find_video_part(parts: list[tuple[int, int]], start_time: int | None, end_time: int | None) -> int | None:
+    """Index of the part matching [start_time, end_time] (±2 s, like _find_chapter).
+
+    Both ends must match, so a whole-chapter range from an older link is not
+    mistaken for its first part.
+    """
+    if start_time is None or len(parts) < 2:
+        return None
+    for i, (s, e) in enumerate(parts):
+        if abs(s - start_time) <= 2 and (end_time is None or abs(e - end_time) <= 2):
+            return i
+    return None
+
+
+def _next_video_section(chapters: list[dict], ch_idx: int, start_time: int | None, end_time: int | None) -> tuple[str, str, int, int] | None:
+    """Label and range of the video section to offer after [start_time, end_time].
+
+    Next part of the same chapter if it is split, otherwise the first part of the
+    next chapter. Returns (kind, label, start, end), kind being "part" or "track",
+    or None after the last chapter.
+    """
+    parts = _split_range(*_chapter_bounds(chapters[ch_idx]))
+    part_idx = _find_video_part(parts, start_time, end_time)
+    if part_idx is not None and part_idx + 1 < len(parts):
+        s, e = parts[part_idx + 1]
+        return "part", f"{chapters[ch_idx]['title']}, part {part_idx + 2}/{len(parts)}", s, e
+    if ch_idx + 1 < len(chapters):
+        next_ch = chapters[ch_idx + 1]
+        next_parts = _split_range(*_chapter_bounds(next_ch))
+        s, e = next_parts[0]
+        label = next_ch["title"] if len(next_parts) == 1 else f"{next_ch['title']}, part 1/{len(next_parts)}"
+        return "track", label, s, e
+    return None
 
 
 
@@ -1205,7 +1260,14 @@ async def _download_video(video_id: str, output_dir: str, max_height: int = 480,
     out_template = os.path.join(output_dir, f"{safe_id}.%(ext)s")
     
     if start_time is not None or end_time is not None:
-        video_format = f"18/b[height<={max_height}]/bv[height<={max_height}]+ba/b/best"
+        if max_height >= 360:
+            # Format 18 is YouTube's progressive 360p MP4: one stream, so section
+            # downloads are fast and reliable.
+            video_format = f"18/b[height<={max_height}]/bv[height<={max_height}]+ba/b/best"
+        else:
+            # Lower-resolution retry after a section came out over the size limit.
+            # Format 18 is 360p, so keeping it first would download the same file again.
+            video_format = f"bv[height<={max_height}][ext=mp4]+ba[ext=m4a]/bv[height<={max_height}]+ba/b[height<={max_height}]/18/b/best"
     else:
         video_format = f"bv[height<={max_height}]+ba/b[height<={max_height}]/bv*+ba/b/best"
 
@@ -2981,7 +3043,21 @@ async def _do_download(bot, accid, msg, video_id: str, download_type: str):
                                 database.add_url_mapping(short_id, clean_base)
                             else:
                                 short_id = clean_base
-                            error = f"📦 Video exceeds {MAX_FILESIZE_MB} MB size limit even at lower resolutions. Try audio instead: /ytm_{short_id}"
+                            error = f"📦 Video exceeds {MAX_FILESIZE_MB} MB size limit even at lower resolutions."
+                            sec_s = start_time or 0
+                            sec_e = end_time or duration
+                            if sec_e and sec_e - sec_s >= 60:
+                                # Halves of the requested section: each is about half the size.
+                                mid = sec_s + (sec_e - sec_s) // 2
+                                error += (
+                                    f"\n\nTry it in two halves:"
+                                    f"\n📼 {_format_time_range(sec_s, mid)}: /yt_{short_id}_{sec_s}_{mid}"
+                                    f"\n📼 {_format_time_range(mid, sec_e)}: /yt_{short_id}_{mid}_{sec_e}"
+                                )
+                            if start_time is not None or end_time is not None:
+                                error += f"\n\nOr audio only: /ytm_{short_id}_{sec_s}_{sec_e}"
+                            else:
+                                error += f"\n\nOr audio only: /ytm_{short_id}"
                     else:
                         filepath, info_dl, error = await _download_audio(
                             video_id, tmpdir, duration, 
@@ -3097,19 +3173,20 @@ async def _send_from_cache(bot, accid, msg, video_id, download_type, filepath, i
             
         if chapter:
             track_num = ch_idx + 1
-            caption = f"📺 {title} - Track {track_num}. {chapter['title']}{range_suffix} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
+            parts = _split_range(*_chapter_bounds(chapter))
+            part_idx = _find_video_part(parts, start_time, end_time)
+            part_suffix = f", part {part_idx + 1}/{len(parts)}" if part_idx is not None else ""
+            caption = f"📺 {title} - Track {track_num}. {chapter['title']}{part_suffix}{range_suffix} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
         else:
             caption = f"📺 {title}{range_suffix} ({dur_str}, {size_str}, {ext})\n\n🔗 {_make_yt_url(clean_base)}"
         
-        # Check if there is a next track or chunk to offer
-        if chapter and ch_idx is not None and ch_idx + 1 < len(chapters):
-            next_ch = chapters[ch_idx + 1]
-            next_s = int(round(float(next_ch["start_time"])))
-            next_e = int(round(float(next_ch["end_time"])))
-            next_title = next_ch["title"]
+        # Check if there is a next part, track or chunk to offer
+        next_section = _next_video_section(chapters, ch_idx, start_time, end_time) if chapter else None
+        if next_section:
+            kind, next_title, next_s, next_e = next_section
             next_range_str = _format_time_range(next_s, next_e)
             next_cmd = f"/yt_{short_id}_{next_s}_{next_e}"
-            caption += f"\n\n▶️ Next track: {next_title} ({next_range_str}): {next_cmd}"
+            caption += f"\n\n▶️ Next {kind}: {next_title} ({next_range_str}): {next_cmd}"
         elif (start_time is not None or end_time is not None) and total_duration and total_duration > chunk_e:
             next_s = int(chunk_e)
             next_e = int(min(total_duration, next_s + 600))
@@ -3910,9 +3987,14 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
         c_start = int(round(float(chapter["start_time"])))
         c_end = int(round(float(chapter["end_time"])))
         range_label = _format_time_range(c_start, c_end)
-        vid_cmd = f"/yt_{short_id}_{c_start}_{c_end}"
+        # Long chapters are offered as video in parts (audio stays whole: Opus is small)
+        parts = _split_range(c_start, c_end)
+        part_idx = _find_video_part(parts, start_time, end_time) or 0
+        p_start, p_end = parts[part_idx]
+        part_label = f" part {part_idx + 1}/{len(parts)}" if len(parts) > 1 else ""
+        vid_cmd = f"/yt_{short_id}_{p_start}_{p_end}"
         aud_cmd = f"/ytm_{short_id}_{c_start}_{c_end}"
-        video_btn = f"📼 Track {track_num} ({range_label}) {vid_cmd}"
+        video_btn = f"📼 Track {track_num}{part_label} ({_format_time_range(p_start, p_end)}) {vid_cmd}"
         audio_btn = f"💿 Track {track_num} ({audio_fmt}, {audio_size_str}) {aud_cmd}"
         nav_btn = f"💾 /ytms_{short_id}_{c_start}_{c_end}" if is_admin else ""
         
@@ -3943,9 +4025,12 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
             ch_mb = (ch_dur * 128) / 8192
             c0_size_str = f"~{ch_mb:.1f} MB"
         range_label = _format_time_range(s0, e0)
-        vid_cmd = f"/yt_{short_id}_{s0}_{e0}"
+        parts = _split_range(s0, e0)
+        p_start, p_end = parts[0]
+        part_label = f" part 1/{len(parts)}" if len(parts) > 1 else ""
+        vid_cmd = f"/yt_{short_id}_{p_start}_{p_end}"
         aud_cmd = f"/ytm_{short_id}_{s0}_{e0}"
-        video_btn = f"📼 Track 1 ({range_label}) {vid_cmd}"
+        video_btn = f"📼 Track 1{part_label} ({_format_time_range(p_start, p_end)}) {vid_cmd}"
         audio_btn = f"💿 Track 1 ({audio_fmt}, {c0_size_str}) {aud_cmd}"
         nav_btn = f"💾 /ytms_{short_id}_{s0}_{e0}" if is_admin else ""
         total_dur_str = _format_duration(original_duration)
