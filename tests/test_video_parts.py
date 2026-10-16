@@ -134,6 +134,58 @@ class TestVideoPartsMessages(unittest.IsolatedAsyncioTestCase):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+class TestRangeLinkMenu(unittest.TestCase):
+
+    def setUp(self):
+        self.test_db = "test_range_menu_ytbot.db"
+        database.DB_PATH = self.test_db
+        database.init_db()
+
+    def tearDown(self):
+        for path in [self.test_db, f"{self.test_db}-wal", f"{self.test_db}-shm"]:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+    def _menu(self, url, duration, mock_send):
+        bot._display_link_info(MagicMock(), 1, MagicMock(), url, {"title": "Clip", "duration": duration}, None)
+        return mock_send.call_args[0][3]
+
+    @patch('bot._send')
+    @patch('bot._is_dc_admin', return_value=True)
+    def test_short_video_keeps_requested_range(self, mock_is_admin, mock_send):
+        # ?t=34-41 on a 3:25 video used to offer /yt_ID for the whole video
+        text = self._menu("https://youtu.be/aUIXqj47fLg?t=34-41", 205, mock_send)
+        self.assertIn("(00:34-00:41, 00:07)", text)
+        self.assertIn("/yt_aUIXqj47fLg_34_41", text)
+        self.assertIn("/ytm_aUIXqj47fLg_34_41", text)
+        self.assertIn("/ytms_aUIXqj47fLg_34_41", text)
+        self.assertNotIn("/yt_aUIXqj47fLg ", text)
+
+    @patch('bot._send')
+    @patch('bot._is_dc_admin', return_value=False)
+    def test_long_video_respects_end_time(self, mock_is_admin, mock_send):
+        # Range shorter than 10 min inside a long video: the end time is no longer replaced by start+600
+        text = self._menu("https://youtu.be/aUIXqj47fLg?t=100-200", 3600, mock_send)
+        self.assertIn("/yt_aUIXqj47fLg_100_200", text)
+        self.assertIn("/ytm_aUIXqj47fLg_100_200", text)
+
+    @patch('bot._send')
+    @patch('bot._is_dc_admin', return_value=False)
+    def test_start_only_runs_to_end_of_video(self, mock_is_admin, mock_send):
+        text = self._menu("https://youtu.be/aUIXqj47fLg?t=60", 205, mock_send)
+        self.assertIn("/yt_aUIXqj47fLg_60_205", text)
+
+    @patch('bot._send')
+    @patch('bot._is_dc_admin', return_value=False)
+    def test_no_range_short_video_unchanged(self, mock_is_admin, mock_send):
+        text = self._menu("aUIXqj47fLg", 205, mock_send)
+        self.assertIn("/yt_aUIXqj47fLg ", text)
+        self.assertIn("/ytm_aUIXqj47fLg", text)
+
+
 class TestSectionFormat(unittest.IsolatedAsyncioTestCase):
 
     async def _format_for_height(self, height):

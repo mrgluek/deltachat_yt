@@ -26,7 +26,7 @@ import transports_view
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.9.0"
+VERSION = "1.9.1"
 
 dc_cli = BotCli("ytbot")
 
@@ -4054,14 +4054,24 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
                 btn_line
             ]
     else:
-        aud_cmd = f"/ytm_{short_id}"
-        if original_duration > 600:
-            chunk_s = int(start_time or 0)
-            chunk_e = int(min(original_duration, chunk_s + 600))
+        # A time range from the link (?t=34-41, &start=..&end=..) is kept in every
+        # command, so the user gets exactly the part they asked for.
+        sec_s = int(start_time or 0)
+        sec_e = int(end_time) if end_time is not None else original_duration
+        has_range = (start_time is not None or end_time is not None) and sec_e > sec_s
+        range_suffix = f"_{sec_s}_{sec_e}" if has_range else ""
+        aud_cmd = f"/ytm_{short_id}{range_suffix}"
+        if has_range and sec_e - sec_s <= 600:
+            vid_cmd = f"/yt_{short_id}{range_suffix}"
+            video_btn = f"📼 {target_height}p ({_format_time_range(sec_s, sec_e)}, {video_size_str}) {vid_cmd}"
+        elif has_range or original_duration > 600:
+            # Long range or long video: offer it in 10-minute chunks, the first one now
+            chunk_s = sec_s
+            chunk_e = int(min(sec_e if has_range else original_duration, chunk_s + 600))
             part_num = (chunk_s // 600) + 1
             range_label = _format_time_range(chunk_s, chunk_e)
             vid_cmd = f"/yt_{short_id}_{chunk_s}_{chunk_e}"
-            part_prefix = f"Part {part_num} " if part_num > 1 or original_duration > 600 else ""
+            part_prefix = f"Part {part_num} " if not has_range else ""
             video_btn = f"📼 {part_prefix}({range_label}) {vid_cmd}"
         else:
             vid_cmd = f"/yt_{short_id}"
@@ -4070,7 +4080,9 @@ def _display_link_info(bot, accid, msg, video_id: str, info: dict, thumb_path: s
 
         can_audio = duration <= MAX_DURATION_AUDIO
         audio_btn = f"💿 {audio_fmt} ({audio_size_str}) {aud_cmd}" if can_audio else f"💿 Too long (> {MAX_DURATION_AUDIO // 60}m)"
-        nav_btn = f"💾 /ytms_{short_id}" if is_admin and can_audio else ""
+        nav_btn = f"💾 /ytms_{short_id}{range_suffix}" if is_admin and can_audio else ""
+        if has_range:
+            dur_str = f"{_format_time_range(sec_s, sec_e)}, {dur_str}"
 
         if is_audio_only:
             btn_line = f"{audio_btn}   {nav_btn}" if nav_btn else audio_btn
