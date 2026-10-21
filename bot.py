@@ -26,7 +26,7 @@ import transports_view
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.10.0"
+VERSION = "1.10.1"
 
 dc_cli = BotCli("ytbot")
 
@@ -838,6 +838,43 @@ def _format_size(size_bytes: int) -> str:
 
 
 # ── Admin helpers (from deltachat_ntfy pattern) ──
+
+def admin_key_contact_id(bot, accid):
+    """The admin's contact WITH their key, for messages to the admin.
+
+    The core keeps an address-only contact and one contact per key for each address, and
+    lookup_contact_id_by_addr / create_contact give the address-only one: current cores cannot
+    send to it ("e2e encryption unavailable"), so admin notices were lost. The key contact with
+    the fingerprint saved by /initadmin is preferred, then the most recently seen key contact of
+    the admin address (another device of the admin), then the old lookup (older cores)."""
+    email = (database.get_config("admin_dc_email") or "").strip().lower()
+    if not email:
+        return None
+    admin_fp = re.sub(r"[^0-9A-F]", "", (database.get_admin_fingerprint() or "").upper())
+    try:
+        candidates = bot.rpc.get_contact_ids(accid, 0, email) or []
+    except Exception as e:
+        logger.debug(f"Could not list admin contacts: {e}")
+        candidates = []
+    key_contacts = []
+    for cid in candidates:
+        try:
+            c = bot.rpc.get_contact(accid, cid)
+            get_val = c.get if isinstance(c, dict) else (lambda k, d=None, _c=c: getattr(_c, k, d))
+            if (get_val("address") or "").strip().lower() != email or not get_val("is_key_contact", False):
+                continue
+            if admin_fp and admin_fp in (_get_contact_fingerprint(bot, accid, cid, c) or "").split(","):
+                return cid
+            key_contacts.append((get_val("last_seen", 0) or 0, cid))
+        except Exception:
+            continue
+    if key_contacts:
+        return max(key_contacts)[1]
+    try:
+        return bot.rpc.lookup_contact_id_by_addr(accid, email) or None
+    except Exception:
+        return None
+
 
 def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
     self_fps = set()
@@ -2943,12 +2980,10 @@ def _check_disk_space(bot, accid, msg) -> bool:
         last_warn = getattr(_check_disk_space, "last_warn", 0)
         if time.time() - last_warn > 3600:
             _check_disk_space.last_warn = time.time()
-            admin_email = database.get_config("admin_dc_email")
-            if admin_email:
+            admin_contact = admin_key_contact_id(bot, accid)
+            if admin_contact:
                 try:
-                    admin_chat = bot.rpc.create_chat_by_contact_id(
-                        accid, bot.rpc.create_contact(accid, admin_email, "")
-                    )
+                    admin_chat = bot.rpc.create_chat_by_contact_id(accid, admin_contact)
                     _send(bot, accid, admin_chat, f"⚠️ SYSTEM WARNING: Disk space is below 20%! Only {usage.free // (1024**3)} GB left.")
                 except Exception as e:
                     bot.logger.error(f"Failed to warn admin about disk space: {e}")
