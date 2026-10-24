@@ -64,7 +64,7 @@ A plain `/help` sent in a group chat is answered in a private 1:1 chat with the 
 ### Prerequisites
 
 - Docker and Docker Compose
-- A Delta Chat account for the bot
+- Optional: an email account for the bot (otherwise it creates its own chatmail account)
 
 ### Setup
 
@@ -75,10 +75,22 @@ A plain `/help` sent in a group chat is answered in a private 1:1 chat with the 
    docker compose build
    ```
 
-3. Initialize the Delta Chat account:
+3. Configure email and admin (optional):
+
+   Skip this step and the bot creates its account by itself at first start: the Delta Chat core (2.62+) picks the fastest chatmail relay from its built-in list and later adds further relays in the background.
+
+   To choose the account yourself, initialize it with your email and password, or with `DCACCOUNT:server.tld` for an account on a specific chatmail relay:
 
    ```bash
    docker compose run --rm yt_bot python bot.py init bot-email@chatmail-example.com your_password
+   docker compose run --rm yt_bot python bot.py init DCACCOUNT:server.tld
+   ```
+
+   Set the admin's email address and cryptographic fingerprint on the server, or do it later in the bot chat with `/initadmin` (step 6):
+
+   ```bash
+   docker compose run --rm yt_bot python set_admin.py --email admin@yourdomain.com
+   docker compose run --rm yt_bot python set_admin.py --fingerprint 1234ABCD1234ABCD1234ABCD1234ABCD1234ABCD
    ```
 
 4. Start the bot:
@@ -87,7 +99,7 @@ A plain `/help` sent in a group chat is answered in a private 1:1 chat with the 
    docker compose up -d
    ```
 
-5. Check the logs to get the QR code or link to add the bot:
+5. Check the logs to get the QR code or link to add the bot (and, without step 3, the address of the account it created):
 
    ```bash
    docker compose logs -f
@@ -95,6 +107,19 @@ A plain `/help` sent in a group chat is answered in a private 1:1 chat with the 
 
 6. Add the bot in Delta Chat and send `/initadmin` in a private 1:1 chat to claim ownership.
    *(Note: For security reasons, sensitive commands such as `/initadmin` and `/addtransport` can only be used in private 1:1 chats).*
+
+7. Updates:
+   Run `./update.sh` (e.g. from cron) to deploy the newest release: the highest `vX.Y.Z` tag, from GitHub or, when GitHub is unreachable, from the Forgejo mirror; `-f` rebuilds the container without changes. Commits on `main` that are not released yet are not deployed. In `.env.local`, `UPDATE_REF=v1.10.1` stays on that release (to roll back; remove it to follow new releases again), `UPDATE_REF=main` follows the branch, and `MONITOR_URL` pings a healthcheck on start, success and failure. Pushing a `vX.Y.Z` tag publishes the GitHub release with that version's `CHANGELOG.md` section.
+
+### Releasing
+
+Merge into `main`, then tag the merge commit and push the tag:
+
+```bash
+git tag -a vX.Y.Z -m "vX.Y.Z: ..." <commit> && git push origin vX.Y.Z
+```
+
+The tag must match `VERSION` in `bot.py` and have a `## [X.Y.Z]` section in `CHANGELOG.md`. The release workflow publishes the GitHub release, then sends the ntfy notification and the Home Assistant add-on update.
 
 ## Cookies, OAuth Token & Proxy (Age-Restricted & Yandex Music Content)
 

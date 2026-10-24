@@ -26,7 +26,7 @@ import transports_view
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.10.1"
+VERSION = "1.11.0"
 
 dc_cli = BotCli("ytbot")
 
@@ -4310,10 +4310,34 @@ def _run_background_loop():
     loop.run_forever()
 
 
+def ensure_configured_account(bot, args) -> None:
+    """On `serve` without a configured account, let the core create one on a relay it picks.
+
+    init_transports (core 2.62+) with no QR code probes the core's built-in chatmail relay list,
+    configures the fastest one and later adds further relays in the background, so a new bot needs
+    no `init` step. An explicit `bot.py init <addr|DCACCOUNT:...>` still works and takes precedence."""
+    if getattr(getattr(args, "cmd", None), "__name__", "") != "_serve_cmd":
+        return
+    accids = [args.account] if getattr(args, "account", None) else bot.rpc.get_all_account_ids()
+    if any(bot.rpc.is_configured(a) for a in accids):
+        return
+    accid = accids[0] if accids else bot.rpc.add_account()
+    bot.logger.info("No configured account: creating one on a chatmail relay chosen by the core...")
+    try:
+        bot.rpc.set_config(accid, "bot", "1")
+        bot.rpc.init_transports(accid, None)
+        addr = bot.rpc.get_config(accid, "configured_addr")
+        bot.logger.info(f"Account created: {addr}")
+    except Exception as e:
+        # serve then exits with "no configured accounts" and the container restart retries
+        bot.logger.error(f"Automatic account creation failed: {e}")
+
+
 @dc_cli.on_init
 def on_init(bot, args):
     global dc_bot_instance, dc_accid
     bot.logger.info(f"Initializing Delta Chat YouTube Bot v{VERSION}...")
+    ensure_configured_account(bot, args)
     dc_bot_instance = bot
     
     # Ensure cache dir exists
