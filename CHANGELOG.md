@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.11.0] - 2026-10-24
+
+### Added
+- **The bot creates its own account.** `serve` without a configured account (a fresh `docker compose up -d`) no longer exits with "no configured accounts": the bot asks the Delta Chat core (2.62+) to create one, and the core picks the fastest chatmail relay from its built-in list and later adds further relays in the background. The new address is logged. An unconfigured account left over from an earlier attempt is reused; if creation fails, the error is logged and the container restart retries. `bot.py init <addr> <password>` and `bot.py init DCACCOUNT:server.tld` still choose the account explicitly. The README's "Configure email and admin" step is now optional.
+- Unit tests run on GitHub Actions for pushes and pull requests to `main` (`.github/workflows/tests.yml`).
+
+### Changed
+- **The server runs releases, not the tip of `main`.** `update.sh` deploys the newest `vX.Y.Z` tag, so a merge into `main` reaches the server only once it is released; several PRs can go out together. `UPDATE_REF` in `.env.local` pins a release (`UPDATE_REF=v1.10.1` - a rollback; empty again = newest) or follows a branch as before (`UPDATE_REF=main`). A release tag moved on GitHub or Forgejo makes the update fail instead of deploying the changed code. Errors that stopped the script with a message (both remotes unreachable, an unknown `UPDATE_REF`) now also ping the healthcheck's `/fail`, not only failed commands. The script now runs as one function, so the `git reset` that rewrites `update.sh` cannot confuse the running copy.
+- **Releases are published by a tag** (new `.github/workflows/release.yml`): pushing `vX.Y.Z` checks that `bot.py` has that version, creates the GitHub release with the version's section of this file as its notes (an existing release is left alone), then sends the ntfy notification and the `bot-updated` dispatch to `hass-addons-deltachat` (now with `"version"` in the payload). Both used to go out on every push to `main` (`yt-changelog.yml`, removed), so Home Assistant users got unreleased code.
+- Releasing: merge, then `git tag -a vX.Y.Z -m "..." <commit> && git push origin vX.Y.Z`.
+- **Upgrading:** tag `v1.11.0` right after merging this. Until then the new `update.sh` would deploy `v1.10.1`, which still has the old script that follows `main` - and the server would switch back and forth on every run.
+
 ## [1.10.1] - 2026-10-21
 - **Fix: Low-Disk Warning to the Admin Was Not Delivered**: The warning went to a chat opened with `create_contact(admin address)`, the address-only contact, which current cores cannot send to (`e2e encryption unavailable`). It now goes to the admin's contact with their key: the one with the fingerprint saved by `/initadmin`, otherwise the most recently seen key contact of the admin address.
 
