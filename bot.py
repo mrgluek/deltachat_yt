@@ -26,7 +26,10 @@ import transports_view
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.11.0"
+VERSION = "1.11.1"
+# Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
+# every plain text message (commands, links) to a one-by-one "download later", which delays replies.
+DOWNLOAD_LIMIT = 65536
 
 dc_cli = BotCli("ytbot")
 
@@ -4376,8 +4379,8 @@ def on_init(bot, args):
         bot.rpc.set_config(accid, "selfstatus", status_text)
         bot.rpc.set_config(accid, "delete_device_after", "3600")
         try:
-            bot.rpc.set_config(accid, "download_limit", "1")
-            bot.logger.info("Configured auto-download limit (1 byte) in on_init.")
+            bot.rpc.set_config(accid, "download_limit", str(DOWNLOAD_LIMIT))
+            bot.logger.info("Configured auto-download limit (64 KB) in on_init.")
         except Exception as e:
             bot.logger.warning(f"Could not configure storage optimization in on_init: {e}")
         try:
@@ -4496,9 +4499,9 @@ def on_start(bot, _args):
     if accounts:
         dc_accid = accounts[0]
         try:
-            bot.rpc.set_config(dc_accid, "download_limit", "1")
+            bot.rpc.set_config(dc_accid, "download_limit", str(DOWNLOAD_LIMIT))
             bot.rpc.set_config(dc_accid, "delete_device_after", "3600")
-            bot.logger.info("Successfully set auto-download limit to 1 byte and delete_device_after to 1 hour to optimize storage.")
+            bot.logger.info("Successfully set auto-download limit to 64 KB and delete_device_after to 1 hour to optimize storage.")
         except Exception as e:
             bot.logger.error(f"Failed to set storage optimization settings in on_start: {e}")
             
