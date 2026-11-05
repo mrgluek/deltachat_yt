@@ -27,7 +27,7 @@ import transports_view
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("yt_bot")
 
-VERSION = "1.12.0"
+VERSION = "1.12.1"
 # Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
 # every plain text message (commands, links) to a one-by-one "download later", which delays replies.
 DOWNLOAD_LIMIT = 65536
@@ -369,7 +369,7 @@ def _extract_chapters_from_comments(video_url_or_id: str, total_duration: int = 
 
     try:
         req = urllib.request.Request(video_url, headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
             "Cookie": "SOCS=CAISEwgDEgk1Njk1NzU0MDQaAmVuIAEaBgiAk67UBg"
         })
@@ -583,7 +583,7 @@ def _resolve_yandex_preview(yandex_url: str) -> str | None:
         req = urllib.request.Request(
             yandex_url,
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36"
             }
         )
         with urllib.request.urlopen(req, timeout=15) as response:
@@ -2371,7 +2371,7 @@ def _check_youtube_status() -> tuple[bool, str]:
         handlers.append(urllib.request.ProxyHandler({'http': active_proxy, 'https': active_proxy}))
     opener = urllib.request.build_opener(*handlers)
     opener.addheaders = [
-        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36"),
         ("Accept-Language", "en-US,en;q=0.9"),
         ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
     ]
@@ -2492,7 +2492,7 @@ def _check_yandex_status() -> tuple[bool, str]:
         handlers.append(urllib.request.ProxyHandler({'http': active_proxy, 'https': active_proxy}))
     opener = urllib.request.build_opener(*handlers)
     opener.addheaders = [
-        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36"),
         ("Referer", "https://music.yandex.ru/"),
         ("X-Requested-With", "XMLHttpRequest")
     ]

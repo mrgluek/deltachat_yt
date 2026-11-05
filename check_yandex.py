@@ -81,7 +81,7 @@ def check_cookies(cookies_path, test_track="150402031:41648883"):
     
     opener = urllib.request.build_opener(*handlers)
     opener.addheaders = [
-        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36"),
         ("Referer", "https://music.yandex.ru/"),
         ("X-Requested-With", "XMLHttpRequest")
     ]

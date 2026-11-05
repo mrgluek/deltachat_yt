@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.12.1] - 2026-11-05
+
+### Changed
+- **Current Chrome User-Agent**: The browser User-Agent now says Chrome 158 instead of Chrome 120, which had gone stale.
+
 ## [1.12.0] - 2026-10-28
 
 ### Changed
