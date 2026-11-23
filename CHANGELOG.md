@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.12.2] - 2026-11-23
+
+### Fixed
+- **Own Key Fingerprint Is Read Once**: `dc_fingerprint.get_self_fingerprint()` created a new invite link in the Delta Chat core on every call, and the core never removes the old ones. The admin check calls it, and the admin check runs for every download link (rate limit) and every command, so each message added an invite token to the account database. The bot's own fingerprint cannot change for a running account, so it is now read once per account and kept for the life of the process; a failed read is not cached. No extra work on a timer: this removes per-message work. Measured with a fake RPC through `_is_rate_limited` for 1,000 link messages: invite-link calls 1,000 before, 1 after. New tests in `tests/test_fingerprint_cache.py`.
+
 ## [1.12.1] - 2026-11-05
 
 ### Changed
